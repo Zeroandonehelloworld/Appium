@@ -31,8 +31,8 @@ jobs:
 
 
     - name: Start Appium server
-      shell: powershell
-      run: Start-Process appium
+      shell: cmd
+      run: Appium
 
     - name: Wait for Appium to start
       shell: powershell
