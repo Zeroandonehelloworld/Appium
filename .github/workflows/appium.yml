@@ -30,7 +30,9 @@ jobs:
         pip install -r requirements.txt
 
     - name: Start Appium server
-      run: start /b appium
+      shell: powershell
+      run: Start-Process appium
+
 
     - name: Run tests
       run: pytest test_sample.py
