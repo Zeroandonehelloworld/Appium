@@ -35,4 +35,4 @@ jobs:
 
 
     - name: Run tests
-      run: pytest test_sample.py
+      run: node test_sample.js
