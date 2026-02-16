@@ -34,6 +34,11 @@ jobs:
       shell: powershell
       run: Start-Process appium
 
+    - name: Wait for Appium to start
+      shell: powershell
+      run: Start-Sleep -Seconds 5
+
+
 
     - name: Run tests
       run: node test_sample.js
