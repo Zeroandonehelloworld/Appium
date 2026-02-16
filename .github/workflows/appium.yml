@@ -26,7 +26,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        npm install -g appium
+        npm install
         pip install -r requirements.txt
 
     - name: Start Appium server
