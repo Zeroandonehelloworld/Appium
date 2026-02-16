@@ -2,11 +2,12 @@
   "name": "appium-test-project",
   "version": "1.0.0",
   "description": "Minimal Appium test project for GitHub Actions",
-  "main": "test_sample.py",
+  "main": "test_sample.js",
   "scripts": {
-    "test": "pytest test_sample.py"
+    "test": "test_sample.js"
   },
   "dependencies": {
     "appium": "^2.0.0"
   }
 }
+
