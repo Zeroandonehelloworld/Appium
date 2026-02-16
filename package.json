@@ -6,8 +6,11 @@
   "scripts": {
     "test": "test_sample.js"
   },
-  "dependencies": {
-    "appium": "^2.0.0"
-  }
+"dependencies": {
+  "appium": "^2.0.0",
+  "webdriverio": "^8.18.0"
 }
+
+}
+
 
