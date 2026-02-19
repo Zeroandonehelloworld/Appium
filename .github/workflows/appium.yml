@@ -48,19 +48,14 @@ jobs:
         $elapsed = 0
         $ready = $false
         while ($elapsed -lt $timeout) {
-          Start-Sleep -Seconds 3
-          $elapsed += 3
-          Write-Host "--- appium.log so far ---"
-          Get-Content appium.log -ErrorAction SilentlyContinue
-          try {
-            $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" -UseBasicParsing -TimeoutSec 3
-            if ($response.StatusCode -eq 200) {
-              Write-Host "Appium is ready!"
-              $ready = $true
-              break
-            }
-          } catch {
-            Write-Host "Waiting... ($elapsed s elapsed)"
+          Start-Sleep -Seconds 2
+          $elapsed += 2
+          $statusCode = curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:4723/status
+          Write-Host "HTTP status: $statusCode ($elapsed s elapsed)"
+          if ($statusCode -eq "200") {
+            Write-Host "Appium is ready!"
+            $ready = $true
+            break
           }
         }
         if (-not $ready) { throw "Appium did not start in time" }
