@@ -31,7 +31,7 @@ jobs:
 
     - name: Start Appium server
       shell: powershell
-      run: Start-Process -NoNewWindow -FilePath "appium" -RedirectStandardOutput "appium.log" -RedirectStandardError "appium-error.log"
+      run: Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c appium" -RedirectStandardOutput "appium.log" -RedirectStandardError "appium-error.log"
 
     - name: Wait for Appium to be ready
       shell: powershell
