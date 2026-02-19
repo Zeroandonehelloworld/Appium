@@ -32,7 +32,7 @@ jobs:
 
     - name: Start Appium server
       shell: cmd
-      run: Appium
+      run: start /B appium
 
     - name: Wait for Appium to start
       shell: powershell
