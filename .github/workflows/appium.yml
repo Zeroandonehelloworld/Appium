@@ -12,74 +12,45 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v3
 
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v3
       with:
         node-version: '18'
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v4
       with:
         python-version: '3.11'
 
-    - name: Install Appium globally
-      run: npm install -g appium
-
-    # Uncomment and customize if you need specific drivers right away
-    # - name: Install UiAutomator2 driver (for Android)
-    #   run: appium driver install uiautomator2
-
-    - name: Install project dependencies
-      run: npm install
-
-    - name: Start Appium server in background
-      shell: cmd
+    - name: Install dependencies
       run: |
-        start "" /B appium --address 0.0.0.0 --port 4723 --log appium.log > appium-out.log 2> appium-err.log
+        npm install -g appium
+        npm install
 
-    - name: Wait for Appium server to be ready
-      shell: pwsh
+    - name: Start Appium server
+      shell: powershell
+      run: Start-Process -NoNewWindow -FilePath "appium" -RedirectStandardOutput "appium.log" -RedirectStandardError "appium-error.log"
+
+    - name: Wait for Appium to be ready
+      shell: powershell
       run: |
-        $maxAttempts = 40
-        $attempt = 0
-
+        $timeout = 30
+        $elapsed = 0
         do {
           Start-Sleep -Seconds 2
-          $attempt++
-          try {
-            $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" `
-              -UseBasicParsing -TimeoutSec 4 -Method Get
-            if ($response.StatusCode -eq 200) {
-              Write-Output "Appium is ready after $attempt attempts!"
-              break
-            }
-          }
-          catch {
-            Write-Output "Waiting for Appium... attempt $attempt of $maxAttempts"
-          }
-        } while ($attempt -lt $maxAttempts)
+          $elapsed += 2
+          $result = Test-NetConnection -ComputerName 127.0.0.1 -Port 4723 -WarningAction SilentlyContinue
+        } while (-not $result.TcpTestSucceeded -and $elapsed -lt $timeout)
+        if (-not $result.TcpTestSucceeded) { throw "Appium did not start in time" }
 
-        if ($attempt -eq $maxAttempts) {
-          Write-Error "Appium did NOT start after ~80 seconds"
-          Get-Content appium.log -ErrorAction SilentlyContinue
-          Get-Content appium-out.log -ErrorAction SilentlyContinue
-          Get-Content appium-err.log -ErrorAction SilentlyContinue
-          exit 1
-        }
-
-    - name: Run your tests
+    - name: Run tests
       run: node test_sample.js
 
-    # Always show logs at the end — very helpful for debugging
-    - name: Show Appium logs (always run)
-      if: always()
-      shell: pwsh
+    - name: Print Appium logs on failure
+      if: failure()
+      shell: powershell
       run: |
-        Write-Output "=================== Appium main log ==================="
         Get-Content appium.log -ErrorAction SilentlyContinue
-        Write-Output "`n=================== Appium stdout ==================="
-        Get-Content appium-out.log -ErrorAction SilentlyContinue
-        Write-Output "`n=================== Appium stderr ==================="
-        Get-Content appium-err.log -ErrorAction SilentlyContinue
+        Get-Content appium-error.log -ErrorAction SilentlyContinue
