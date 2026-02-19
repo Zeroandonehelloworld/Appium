@@ -35,7 +35,10 @@ jobs:
 
     - name: Start Appium server
       shell: powershell
-      run: Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c appium" -RedirectStandardOutput "appium.log" -RedirectStandardError "appium-error.log"
+      run: |
+        $appiumPath = (Get-Command appium).Source
+        Write-Host "Appium path: $appiumPath"
+        Start-Process -NoNewWindow -FilePath "node.exe" -ArgumentList "$appiumPath" -RedirectStandardOutput "appium.log" -RedirectStandardError "appium-error.log"
 
     - name: Wait for Appium to be ready
       shell: powershell
@@ -46,6 +49,8 @@ jobs:
         while ($elapsed -lt $timeout) {
           Start-Sleep -Seconds 3
           $elapsed += 3
+          Write-Host "--- appium.log so far ---"
+          Get-Content appium.log -ErrorAction SilentlyContinue
           try {
             $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" -UseBasicParsing -TimeoutSec 3
             if ($response.StatusCode -eq 200) {
@@ -62,9 +67,11 @@ jobs:
     - name: Run tests
       run: node test_sample.js
 
-    - name: Print Appium logs on failure
-      if: failure()
+    - name: Print Appium logs
+      if: always()
       shell: powershell
       run: |
+        Write-Host "=== appium.log ==="
         Get-Content appium.log -ErrorAction SilentlyContinue
+        Write-Host "=== appium-error.log ==="
         Get-Content appium-error.log -ErrorAction SilentlyContinue
