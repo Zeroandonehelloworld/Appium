@@ -12,27 +12,74 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: '18'
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
-    - name: Install dependencies
-      run: |
-        npm install -g appium       # installs Appium globally
-        npm install                 # installs project dependencies (including webdriverio)
+    - name: Install Appium globally
+      run: npm install -g appium
 
-    - name: Start Appium server
-      run: |
-        npx appium --log-level info &
-        sleep 5
+    # Uncomment and customize if you need specific drivers right away
+    # - name: Install UiAutomator2 driver (for Android)
+    #   run: appium driver install uiautomator2
 
-    - name: Run tests
+    - name: Install project dependencies
+      run: npm install
+
+    - name: Start Appium server in background
+      shell: cmd
+      run: |
+        start "" /B appium --address 0.0.0.0 --port 4723 --log appium.log > appium-out.log 2> appium-err.log
+
+    - name: Wait for Appium server to be ready
+      shell: pwsh
+      run: |
+        $maxAttempts = 40
+        $attempt = 0
+
+        do {
+          Start-Sleep -Seconds 2
+          $attempt++
+          try {
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" `
+              -UseBasicParsing -TimeoutSec 4 -Method Get
+            if ($response.StatusCode -eq 200) {
+              Write-Output "Appium is ready after $attempt attempts!"
+              break
+            }
+          }
+          catch {
+            Write-Output "Waiting for Appium... attempt $attempt of $maxAttempts"
+          }
+        } while ($attempt -lt $maxAttempts)
+
+        if ($attempt -eq $maxAttempts) {
+          Write-Error "Appium did NOT start after ~80 seconds"
+          Get-Content appium.log -ErrorAction SilentlyContinue
+          Get-Content appium-out.log -ErrorAction SilentlyContinue
+          Get-Content appium-err.log -ErrorAction SilentlyContinue
+          exit 1
+        }
+
+    - name: Run your tests
       run: node test_sample.js
+
+    # Always show logs at the end — very helpful for debugging
+    - name: Show Appium logs (always run)
+      if: always()
+      shell: pwsh
+      run: |
+        Write-Output "=================== Appium main log ==================="
+        Get-Content appium.log -ErrorAction SilentlyContinue
+        Write-Output "`n=================== Appium stdout ==================="
+        Get-Content appium-out.log -ErrorAction SilentlyContinue
+        Write-Output "`n=================== Appium stderr ==================="
+        Get-Content appium-err.log -ErrorAction SilentlyContinue
