@@ -26,10 +26,10 @@ jobs:
 
     - name: Install dependencies
       run: |
-        npm install -g appium
+        npm install -g appium@3
         npm install
 
-    - name: Install Appium Driver
+    - name: Install Appium Windows Driver
       run: appium driver install windows
 
     - name: Start Appium server
