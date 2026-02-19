@@ -1,4 +1,5 @@
 name: Appium Tests
+
 on:
   push:
     branches: [ main ]
@@ -8,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -24,38 +26,13 @@ jobs:
 
     - name: Install dependencies
       run: |
-        npm install -g appium
-        # IMPORTANT: Appium 2.0+ requires drivers to be installed manually
-        appium driver install uiautomator2
-        npm install
+        npm install -g appium       # installs Appium globally
+        npm install                 # installs project dependencies (including webdriverio)
 
     - name: Start Appium server
-      shell: bash
-      # Use & to run in background and redirect logs to troubleshoot if it fails
-      run: appium --address 127.0.0.1 --port 4723 > appium.log 2>&1 &
-
-    - name: Wait for Appium to start
-      shell: powershell
       run: |
-        # Polls the server status until it returns a 200 OK
-        $attempt = 0
-        while($attempt -lt 10) {
-          try {
-            $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" -UseBasicParsing
-            if ($response.StatusCode -eq 200) { break }
-          } catch {
-            Write-Host "Waiting for Appium..."
-            Start-Sleep -Seconds 3
-            $attempt++
-          }
-        }
+        npx appium --log-level info &
+        sleep 5
 
     - name: Run tests
       run: node test_sample.js
-
-    - name: Upload Appium Logs (If tests fail)
-      if: failure()
-      uses: actions/upload-artifact@v3
-      with:
-        name: appium-logs
-        path: appium.log
