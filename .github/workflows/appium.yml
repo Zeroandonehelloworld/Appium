@@ -12,42 +12,80 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4   # updated to latest version
 
     - name: Set up Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: '18'
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
-    - name: Install dependencies
-      run: |
-        npm install -g appium       # Install Appium globally
-        npm install                 # Install project dependencies (e.g., WebdriverIO)
+    - name: Install Appium globally
+      run: npm install -g appium
 
-    - name: Start Appium server
-      shell: powershell
-      run: |
-        # Start Appium in a separate process
-        Start-Process appium
+    # Optional: install needed drivers (uncomment what you need)
+    # - name: Install UiAutomator2 driver (Android)
+    #   run: appium driver install uiautomator2
+    #
+    # - name: Install XCUITest driver (iOS - simulator only on Windows is limited)
+    #   run: appium driver install xcuitest
 
-        # Wait until Appium is ready on port 4723
-        $timeout = 60
-        $elapsed = 0
-        while (-not (Test-NetConnection -ComputerName 127.0.0.1 -Port 4723).TcpTestSucceeded) {
-          Write-Host "Waiting for Appium to start..."
+    - name: Install project dependencies
+      run: npm install
+
+    - name: Start Appium server in background
+      shell: pwsh
+      run: |
+        Start-Process -NoNewWindow appium `
+          -ArgumentList "--address", "0.0.0.0", "--port", "4723", "--log", "appium.log" `
+          -RedirectStandardOutput "appium-out.log" `
+          -RedirectStandardError "appium-err.log"
+
+    - name: Wait for Appium server to be ready
+      shell: pwsh
+      run: |
+        $maxAttempts = 40
+        $attempt = 0
+
+        do {
           Start-Sleep -Seconds 2
-          $elapsed += 2
-          if ($elapsed -ge $timeout) {
-            Write-Error "Appium did not start in $timeout seconds."
-            exit 1
+          $attempt++
+          try {
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" `
+              -UseBasicParsing -TimeoutSec 4 -Method Get
+            if ($response.StatusCode -eq 200) {
+              Write-Output "Appium is ready! (attempt $attempt)"
+              break
+            }
           }
+          catch {
+            Write-Output "Still waiting... ($attempt/$maxAttempts)"
+          }
+        } while ($attempt -lt $maxAttempts)
+
+        if ($attempt -eq $maxAttempts) {
+          Write-Error "Appium failed to start after $maxAttempts attempts"
+          Get-Content appium.log -ErrorAction SilentlyContinue
+          Get-Content appium-out.log -ErrorAction SilentlyContinue
+          Get-Content appium-err.log -ErrorAction SilentlyContinue
+          exit 1
         }
-        Write-Host "Appium server is ready!"
 
     - name: Run tests
       run: node test_sample.js
+
+    # Very useful for debugging – always show logs when job fails or succeeds
+    - name: Show Appium logs (always)
+      if: always()
+      shell: pwsh
+      run: |
+        Write-Output "=== Appium main log ==="
+        Get-Content appium.log -ErrorAction SilentlyContinue
+        Write-Output "`n=== Appium stdout ==="
+        Get-Content appium-out.log -ErrorAction SilentlyContinue
+        Write-Output "`n=== Appium stderr ==="
+        Get-Content appium-err.log -ErrorAction SilentlyContinue
