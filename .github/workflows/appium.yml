@@ -29,6 +29,9 @@ jobs:
         npm install -g appium
         npm install
 
+    - name: Install Appium Driver
+      run: appium driver install windows
+
     - name: Start Appium server
       shell: powershell
       run: Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c appium" -RedirectStandardOutput "appium.log" -RedirectStandardError "appium-error.log"
@@ -36,14 +39,24 @@ jobs:
     - name: Wait for Appium to be ready
       shell: powershell
       run: |
-        $timeout = 30
+        $timeout = 60
         $elapsed = 0
-        do {
-          Start-Sleep -Seconds 2
-          $elapsed += 2
-          $result = Test-NetConnection -ComputerName 127.0.0.1 -Port 4723 -WarningAction SilentlyContinue
-        } while (-not $result.TcpTestSucceeded -and $elapsed -lt $timeout)
-        if (-not $result.TcpTestSucceeded) { throw "Appium did not start in time" }
+        $ready = $false
+        while ($elapsed -lt $timeout) {
+          Start-Sleep -Seconds 3
+          $elapsed += 3
+          try {
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" -UseBasicParsing -TimeoutSec 3
+            if ($response.StatusCode -eq 200) {
+              Write-Host "Appium is ready!"
+              $ready = $true
+              break
+            }
+          } catch {
+            Write-Host "Waiting... ($elapsed s elapsed)"
+          }
+        }
+        if (-not $ready) { throw "Appium did not start in time" }
 
     - name: Run tests
       run: node test_sample.js
