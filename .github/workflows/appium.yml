@@ -36,9 +36,10 @@ jobs:
     - name: Start Appium server
       shell: powershell
       run: |
-        $appiumPath = (Get-Command appium).Source
-        Write-Host "Appium path: $appiumPath"
-        Start-Process -NoNewWindow -FilePath "node.exe" -ArgumentList "$appiumPath" -RedirectStandardOutput "appium.log" -RedirectStandardError "appium-error.log"
+        $globalRoot = npm root -g
+        $appiumJs = "$globalRoot\appium\index.js"
+        Write-Host "Launching: node $appiumJs"
+        Start-Process -NoNewWindow -FilePath "node.exe" -ArgumentList $appiumJs -RedirectStandardOutput "appium.log" -RedirectStandardError "appium-error.log"
 
     - name: Wait for Appium to be ready
       shell: powershell
