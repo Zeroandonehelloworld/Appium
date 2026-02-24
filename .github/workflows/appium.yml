@@ -1,188 +1,92 @@
 name: Appium Tests
+
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+
 jobs:
   test:
     runs-on: windows-latest
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    
-    - name: Set up Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '20'
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        npm install -g appium@3
-        npm install appium@3 --save
-        npm install
-      shell: powershell
-    
-    - name: Install Appium Windows Driver
-      run: npx appium driver install windows
-      shell: powershell
-    
-    - name: Start Appium server
-      shell: powershell
-      run: |
-        $globalRoot = npm root -g
-        $appiumJs = "$globalRoot\appium\index.js"
-        Write-Host "Launching: node $appiumJs"
-        
-        # Get a random port to avoid conflicts
-        $port = 4723
-        Write-Host "Starting Appium on port $port"
-        
-        # Start Appium with explicit port and allow CORS
-        Start-Process -NoNewWindow -FilePath "node.exe" -ArgumentList "$appiumJs", "--port", "$port", "--allow-cors" -RedirectStandardOutput "appium.log" -RedirectStandardError "appium-error.log"
-        
-        # Give Appium a moment to start
-        Start-Sleep -Seconds 5
-    
-    - name: Wait for Appium to be ready
-      shell: powershell
-      run: |
-        $timeout = 60
-        $elapsed = 0
-        $ready = $false
-        $port = 4723
-        
-        Write-Host "Checking Appium status on port $port..."
-        
-        while ($elapsed -lt $timeout) {
-          try {
-            # Use Invoke-WebRequest instead of curl for better PowerShell compatibility
-            $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/status" -Method Get -UseBasicParsing -ErrorAction SilentlyContinue
-            if ($response.StatusCode -eq 200) {
-              Write-Host "Appium is ready! Status code: $($response.StatusCode)"
-              Write-Host "Response: $($response.Content)"
-              $ready = $true
-              break
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: Install Appium globally
+        run: npm install -g appium@2
+
+      - name: Install Appium Windows Driver
+        run: appium driver install windows
+
+      - name: Start Appium server
+        shell: powershell
+        run: |
+          $appiumCmd = (Get-Command appium).Source
+          Write-Host "Starting Appium from: $appiumCmd"
+          Start-Process -NoNewWindow `
+            -FilePath "node.exe" `
+            -ArgumentList $appiumCmd `
+            -RedirectStandardOutput "appium.log" `
+            -RedirectStandardError "appium-error.log"
+          Write-Host "Appium process started."
+
+      - name: Wait for Appium to be ready
+        shell: powershell
+        run: |
+          $timeout = 90
+          $elapsed = 0
+          $ready = $false
+
+          Write-Host "Waiting for Appium to initialize..."
+          Start-Sleep -Seconds 5
+
+          while ($elapsed -lt $timeout) {
+            Start-Sleep -Seconds 3
+            $elapsed += 3
+            try {
+              $statusCode = curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:4723/status 2>$null
+              Write-Host "HTTP status: $statusCode (${elapsed}s elapsed)"
+              if ($statusCode -eq "200") {
+                Write-Host "Appium is ready!"
+                $ready = $true
+                break
+              }
+            } catch {
+              Write-Host "Curl check failed, retrying..."
             }
-          } catch {
-            Write-Host "Appium not ready yet... ($elapsed s elapsed)"
           }
-          
-          Start-Sleep -Seconds 2
-          $elapsed += 2
-        }
-        
-        if (-not $ready) {
-          # Check if Appium process is running
-          $appiumProcess = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*appium*" }
-          if ($appiumProcess) {
-            Write-Host "Appium process is running but not responding. Checking logs..."
-          } else {
-            Write-Host "Appium process is not running!"
+
+          if (-not $ready) {
+            Write-Host "=== appium.log ==="
+            Get-Content appium.log -ErrorAction SilentlyContinue
+            Write-Host "=== appium-error.log ==="
+            Get-Content appium-error.log -ErrorAction SilentlyContinue
+            throw "Appium did not start within $timeout seconds"
           }
-          
-          # Display logs for debugging
+
+      - name: Run tests
+        run: node test_sample.js
+
+      - name: Print Appium logs
+        if: always()
+        shell: powershell
+        run: |
           Write-Host "=== appium.log ==="
           Get-Content appium.log -ErrorAction SilentlyContinue
           Write-Host "=== appium-error.log ==="
           Get-Content appium-error.log -ErrorAction SilentlyContinue
-          
-          throw "Appium did not start properly within $timeout seconds"
-        }
-    
-    - name: Verify Appium is working
-      shell: powershell
-      run: |
-        # Test Appium with a simple session check
-        $port = 4723
-        try {
-          $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/status" -Method Get -UseBasicParsing
-          Write-Host "Appium status verified: $($response.Content)"
-        } catch {
-          Write-Host "Warning: Could not verify Appium status, but will proceed with tests"
-        }
-    
-    - name: Check test file exists
-      shell: powershell
-      run: |
-        if (Test-Path "test_sample.js") {
-          Write-Host "test_sample.js found"
-          Get-Content test_sample.js -Head 10
-        } else {
-          Write-Host "Warning: test_sample.js not found, creating a sample test file"
-          @"
-const { remote } = require('webdriverio');
-
-(async () => {
-  const capabilities = {
-    platformName: 'Windows',
-    'appium:automationName': 'Windows',
-    'appium:app': 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App'
-  };
-
-  const driver = await remote({
-    protocol: 'http',
-    hostname: '127.0.0.1',
-    port: 4723,
-    path: '/',
-    capabilities
-  });
-
-  console.log('Session created successfully!');
-  await driver.deleteSession();
-})().catch(console.error);
-"@ | Out-File -FilePath "test_sample.js" -Encoding UTF8
-        }
-    
-    - name: Install WebDriverIO for tests
-      run: npm install webdriverio
-      shell: powershell
-    
-    - name: Run tests
-      run: node test_sample.js
-      shell: powershell
-      continue-on-error: true
-    
-    - name: Print Appium logs
-      if: always()
-      shell: powershell
-      run: |
-        Write-Host "=== Final Debug Information ==="
-        Write-Host "=== Current Directory Contents ==="
-        Get-ChildItem
-        
-        Write-Host "=== Node Processes ==="
-        Get-Process node -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, CPU
-        
-        Write-Host "=== Port Usage ==="
-        netstat -an | Select-String "4723"
-        
-        Write-Host "=== appium.log ==="
-        if (Test-Path "appium.log") {
-          Get-Content appium.log -ErrorAction SilentlyContinue
-        } else {
-          Write-Host "appium.log not found"
-        }
-        
-        Write-Host "=== appium-error.log ==="
-        if (Test-Path "appium-error.log") {
-          Get-Content appium-error.log -ErrorAction SilentlyContinue
-        } else {
-          Write-Host "appium-error.log not found"
-        }
-        
-        Write-Host "=== test_sample.js output ==="
-        if (Test-Path "test-results.log") {
-          Get-Content test-results.log -ErrorAction SilentlyContinue
-        }
-    
-    - name: Kill Appium process
-      if: always()
-      shell: powershell
-      run: |
-        Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
