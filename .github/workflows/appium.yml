@@ -24,22 +24,29 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Upgrade local appium to v3 in package.json
-        run: npm install appium@next --save --legacy-peer-deps
+      - name: Set npm config
+        run: npm config set legacy-peer-deps true
 
-      - name: Install Node dependencies
+      - name: Remove stale lockfile
+        run: |
+          if (Test-Path package-lock.json) { Remove-Item package-lock.json -Force }
+        shell: powershell
+
+      - name: Force local appium to v3
+        run: |
+          npm uninstall appium --legacy-peer-deps
+          npm install appium@next --save --legacy-peer-deps
+
+      - name: Install project dependencies
         run: npm install --legacy-peer-deps
 
       - name: Install Appium 3 globally
         run: npm install -g appium@next
 
-      - name: Verify Appium version
+      - name: Verify Appium version (must be 3.x)
         run: appium --version
 
-      - name: Set npm legacy-peer-deps globally
-        run: npm config set legacy-peer-deps true
-
-      - name: Install Appium Windows Driver from npm
+      - name: Install Appium Windows Driver
         run: appium driver install --source=npm appium-windows-driver
 
       - name: Verify Windows Driver installed
@@ -48,20 +55,40 @@ jobs:
       - name: Start Appium server
         shell: powershell
         run: |
-          $globalRoot = npm root -g
-          $appiumJs = "$globalRoot\appium\build\lib\main.js"
-          Write-Host "Appium JS path: $appiumJs"
-          if (-not (Test-Path $appiumJs)) {
-            Write-Host "build\lib\main.js not found, searching..."
-            $appiumJs = Get-ChildItem "$globalRoot\appium" -Recurse -Filter "main.js" | Select-Object -First 1 -ExpandProperty FullName
-            Write-Host "Found: $appiumJs"
+          # Use the .cmd wrapper — avoids spawn EINVAL from passing .ps1 or .js paths to node
+          $npmPrefix = npm prefix -g
+          $appiumCmd = "$npmPrefix\appium.cmd"
+          Write-Host "Appium cmd path: $appiumCmd"
+
+          if (-not (Test-Path $appiumCmd)) {
+            # fallback: search common locations
+            $appiumCmd = "C:\npm\prefix\appium.cmd"
+            Write-Host "Fallback path: $appiumCmd"
           }
-          Start-Process -NoNewWindow `
-            -FilePath "node.exe" `
-            -ArgumentList $appiumJs `
-            -RedirectStandardOutput "appium.log" `
-            -RedirectStandardError "appium-error.log"
-          Write-Host "Appium process started."
+
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = $appiumCmd
+          $psi.Arguments = "--port 4723"
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $psi.UseShellExecute = $false
+          $psi.CreateNoWindow = $true
+
+          $process = New-Object System.Diagnostics.Process
+          $process.StartInfo = $psi
+
+          # Async log capture to files
+          $outFile = [System.IO.StreamWriter]::new("appium.log", $false)
+          $errFile = [System.IO.StreamWriter]::new("appium-error.log", $false)
+
+          $process.add_OutputDataReceived({ param($s,$e) if ($e.Data) { $outFile.WriteLine($e.Data); $outFile.Flush() } })
+          $process.add_ErrorDataReceived({ param($s,$e) if ($e.Data) { $errFile.WriteLine($e.Data); $errFile.Flush() } })
+
+          $process.Start() | Out-Null
+          $process.BeginOutputReadLine()
+          $process.BeginErrorReadLine()
+
+          Write-Host "Appium started with PID: $($process.Id)"
 
       - name: Wait for Appium to be ready
         shell: powershell
@@ -71,21 +98,22 @@ jobs:
           $ready = $false
 
           Write-Host "Waiting for Appium to initialize..."
-          Start-Sleep -Seconds 8
+          Start-Sleep -Seconds 10
 
           while ($elapsed -lt $timeout) {
             Start-Sleep -Seconds 3
             $elapsed += 3
             try {
-              $statusCode = curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:4723/status 2>$null
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+              $statusCode = $response.StatusCode
               Write-Host "HTTP status: $statusCode (${elapsed}s elapsed)"
-              if ($statusCode -eq "200") {
+              if ($statusCode -eq 200) {
                 Write-Host "Appium is ready!"
                 $ready = $true
                 break
               }
             } catch {
-              Write-Host "Curl check failed, retrying..."
+              Write-Host "Not ready yet (${elapsed}s elapsed): $_"
             }
           }
 
