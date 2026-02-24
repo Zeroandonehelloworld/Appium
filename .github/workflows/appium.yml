@@ -24,14 +24,20 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Upgrade local appium to v3 in package.json
+        run: npm install appium@next --save --legacy-peer-deps
+
       - name: Install Node dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Install Appium 3 globally
         run: npm install -g appium@next
 
       - name: Verify Appium version
         run: appium --version
+
+      - name: Set npm legacy-peer-deps globally
+        run: npm config set legacy-peer-deps true
 
       - name: Install Appium Windows Driver from npm
         run: appium driver install --source=npm appium-windows-driver
