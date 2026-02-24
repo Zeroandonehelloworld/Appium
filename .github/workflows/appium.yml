@@ -33,8 +33,11 @@ jobs:
       - name: Verify Appium version
         run: appium --version
 
-      - name: Install Appium Windows Driver
-        run: appium driver install windows
+      - name: Install Appium Windows Driver from npm
+        run: appium driver install --source=npm appium-windows-driver
+
+      - name: Verify Windows Driver installed
+        run: appium driver list --installed
 
       - name: Start Appium server
         shell: powershell
