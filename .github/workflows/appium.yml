@@ -48,11 +48,17 @@ jobs:
       - name: Start Appium server
         shell: powershell
         run: |
-          $appiumCmd = (Get-Command appium).Source
-          Write-Host "Starting Appium from: $appiumCmd"
+          $globalRoot = npm root -g
+          $appiumJs = "$globalRoot\appium\build\lib\main.js"
+          Write-Host "Appium JS path: $appiumJs"
+          if (-not (Test-Path $appiumJs)) {
+            Write-Host "build\lib\main.js not found, searching..."
+            $appiumJs = Get-ChildItem "$globalRoot\appium" -Recurse -Filter "main.js" | Select-Object -First 1 -ExpandProperty FullName
+            Write-Host "Found: $appiumJs"
+          }
           Start-Process -NoNewWindow `
             -FilePath "node.exe" `
-            -ArgumentList $appiumCmd `
+            -ArgumentList $appiumJs `
             -RedirectStandardOutput "appium.log" `
             -RedirectStandardError "appium-error.log"
           Write-Host "Appium process started."
@@ -60,12 +66,12 @@ jobs:
       - name: Wait for Appium to be ready
         shell: powershell
         run: |
-          $timeout = 90
+          $timeout = 120
           $elapsed = 0
           $ready = $false
 
           Write-Host "Waiting for Appium to initialize..."
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 8
 
           while ($elapsed -lt $timeout) {
             Start-Sleep -Seconds 3
