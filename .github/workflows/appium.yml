@@ -12,74 +12,101 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4   # ← updated to v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '18'        # ← 18 is more stable for Appium Windows right now
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install project dependencies
+      - name: Install Appium 2 and dependencies
         run: |
-          npm ci
+          npm install -g appium@2
+          npm install
+          # If your test project has package.json with appium as devDependency → npm install is enough
 
-      - name: Install Appium locally
-        run: |
-          npm install appium@3 --save-dev
-          npx appium driver install windows
+      - name: Install Appium Windows driver
+        run: appium driver install windows
 
-      - name: Start Appium server
+      - name: Install known-good WinAppDriver 1.2.1
         shell: powershell
         run: |
-          Start-Process -NoNewWindow `
-            -FilePath "npx.cmd" `
-            -ArgumentList "appium --port 4723" `
-            -RedirectStandardOutput "appium.log" `
-            -RedirectStandardError "appium-error.log"
+          $wadUrl = "https://github.com/microsoft/WinAppDriver/releases/download/v1.2.1/WinAppDriver.msi"
+          $msiPath = "$env:TEMP\WinAppDriver.msi"
+          Write-Host "Downloading WinAppDriver 1.2.1..."
+          Invoke-WebRequest -Uri $wadUrl -OutFile $msiPath
+          Write-Host "Installing WinAppDriver (quiet mode)..."
+          Start-Process msiexec.exe -ArgumentList "/i $msiPath /quiet /norestart" -Wait
+          Write-Host "WinAppDriver installation finished."
+
+      - name: Start Appium server in background
+        shell: powershell
+        run: |
+          $job = Start-Job -ScriptBlock {
+            appium server --port 4723 --log appium.log --log-level debug
+          }
+          Start-Sleep -Seconds 8   # give it some time to start
+
+          # Optional: you can also try foreground if background fails too often:
+          # appium server --port 4723 --log appium.log > appium-out.log 2> appium-error.log
 
       - name: Wait for Appium to be ready
         shell: powershell
         run: |
-          $timeout = 60
+          $timeoutSeconds = 90
           $elapsed = 0
           $ready = $false
 
-          while ($elapsed -lt $timeout) {
-            Start-Sleep -Seconds 2
-            $elapsed += 2
+          while ($elapsed -lt $timeoutSeconds) {
+            Start-Sleep -Seconds 3
+            $elapsed += 3
 
             try {
-              $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" -UseBasicParsing -ErrorAction Stop
-              if ($response.StatusCode -eq 200) {
-                Write-Host "Appium is ready!"
-                $ready = $true
-                break
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" -Method Get -UseBasicParsing -TimeoutSec 5
+              $status = $response.StatusCode
+              Write-Host "Status code: $status  ($elapsed s)"
+              if ($status -eq 200) {
+                $content = $response.Content | ConvertFrom-Json
+                if ($content.value.ready -eq $true) {
+                  Write-Host "Appium is ready!"
+                  $ready = $true
+                  break
+                }
               }
-            } catch {
-              Write-Host "Waiting... ($elapsed s)"
+            }
+            catch {
+              Write-Host "Still waiting... $_"
             }
           }
 
           if (-not $ready) {
-            Write-Host "Appium failed to start"
-            Get-Content appium.log -ErrorAction SilentlyContinue
-            Get-Content appium-error.log -ErrorAction SilentlyContinue
-            throw "Appium did not start in time"
+            throw "Appium server did not become ready within $timeoutSeconds seconds"
           }
 
       - name: Run tests
         run: node test_sample.js
+        env:
+          APPIUM_HOST: 127.0.0.1
+          APPIUM_PORT: 4723
 
-      - name: Print Appium logs
+      - name: Print Appium logs (always)
         if: always()
         shell: powershell
         run: |
-          Write-Host "=== appium.log ==="
-          Get-Content appium.log -ErrorAction SilentlyContinue
-          Write-Host "=== appium-error.log ==="
-          Get-Content appium-error.log -ErrorAction SilentlyContinue
+          Write-Host "================ APP LOG ================"
+          Get-Content appium.log -ErrorAction SilentlyContinue | Select-Object -Last 60
+          Write-Host "=================== END ================="
+
+      - name: Stop Appium (cleanup)
+        if: always()
+        shell: powershell
+        run: |
+          try {
+            Get-Job | Stop-Job -ErrorAction SilentlyContinue
+            Get-Job | Remove-Job -ErrorAction SilentlyContinue
+          } catch {}
