@@ -11,63 +11,75 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '20'
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Install dependencies
-      run: |
-        npm install -g appium@3
-        npm install appium@3 --save
-        npm install
+      - name: Install project dependencies
+        run: |
+          npm ci
 
-    - name: Install Appium Windows Driver
-      run: appium driver install windows
+      - name: Install Appium locally
+        run: |
+          npm install appium@3 --save-dev
+          npx appium driver install windows
 
-    - name: Start Appium server
-      shell: powershell
-      run: |
-        $globalRoot = npm root -g
-        $appiumJs = "$globalRoot\appium\index.js"
-        Write-Host "Launching: node $appiumJs"
-        Start-Process -NoNewWindow -FilePath "node.exe" -ArgumentList $appiumJs -RedirectStandardOutput "appium.log" -RedirectStandardError "appium-error.log"
+      - name: Start Appium server
+        shell: powershell
+        run: |
+          Start-Process -NoNewWindow `
+            -FilePath "npx.cmd" `
+            -ArgumentList "appium --port 4723" `
+            -RedirectStandardOutput "appium.log" `
+            -RedirectStandardError "appium-error.log"
 
-    - name: Wait for Appium to be ready
-      shell: powershell
-      run: |
-        $timeout = 60
-        $elapsed = 0
-        $ready = $false
-        while ($elapsed -lt $timeout) {
-          Start-Sleep -Seconds 2
-          $elapsed += 2
-          $statusCode = curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:4723/status
-          Write-Host "HTTP status: $statusCode ($elapsed s elapsed)"
-          if ($statusCode -eq "200") {
-            Write-Host "Appium is ready!"
-            $ready = $true
-            break
+      - name: Wait for Appium to be ready
+        shell: powershell
+        run: |
+          $timeout = 60
+          $elapsed = 0
+          $ready = $false
+
+          while ($elapsed -lt $timeout) {
+            Start-Sleep -Seconds 2
+            $elapsed += 2
+
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" -UseBasicParsing -ErrorAction Stop
+              if ($response.StatusCode -eq 200) {
+                Write-Host "Appium is ready!"
+                $ready = $true
+                break
+              }
+            } catch {
+              Write-Host "Waiting... ($elapsed s)"
+            }
           }
-        }
-        if (-not $ready) { throw "Appium did not start in time" }
 
-    - name: Run tests
-      run: node test_sample.js
+          if (-not $ready) {
+            Write-Host "Appium failed to start"
+            Get-Content appium.log -ErrorAction SilentlyContinue
+            Get-Content appium-error.log -ErrorAction SilentlyContinue
+            throw "Appium did not start in time"
+          }
 
-    - name: Print Appium logs
-      if: always()
-      shell: powershell
-      run: |
-        Write-Host "=== appium.log ==="
-        Get-Content appium.log -ErrorAction SilentlyContinue
-        Write-Host "=== appium-error.log ==="
-        Get-Content appium-error.log -ErrorAction SilentlyContinue
+      - name: Run tests
+        run: node test_sample.js
+
+      - name: Print Appium logs
+        if: always()
+        shell: powershell
+        run: |
+          Write-Host "=== appium.log ==="
+          Get-Content appium.log -ErrorAction SilentlyContinue
+          Write-Host "=== appium-error.log ==="
+          Get-Content appium-error.log -ErrorAction SilentlyContinue
