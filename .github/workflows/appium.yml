@@ -27,8 +27,11 @@ jobs:
       - name: Install Node dependencies
         run: npm install
 
-      - name: Install Appium globally
-        run: npm install -g appium@2
+      - name: Install Appium 3 globally
+        run: npm install -g appium@next
+
+      - name: Verify Appium version
+        run: appium --version
 
       - name: Install Appium Windows Driver
         run: appium driver install windows
