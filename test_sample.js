@@ -4,12 +4,12 @@ const capabilities = {
   "appium:platformName": "Android",
   "appium:deviceName": "127.0.0.1:5555",
   "appium:automationName": "UiAutomator2",
-  // Uncomment and set app path if testing with APK
-  // "appium:app": "path/to/app.apk"
-
-  // Example: Play Store
+  // No app / APK → we launch the built-in Play Store
   "appium:appPackage": "com.android.vending",
-  // "appium:appActivity": "com.google.android.finsky.activities.MainActivity"
+  // Optional: uncomment if Play Store launch is unstable
+  // "appium:appActivity": "com.google.android.finsky.activities.MainActivity",
+  // "appium:noReset": true,
+  // "appium:fullReset": false
 };
 
 (async () => {
@@ -23,11 +23,19 @@ const capabilities = {
 
   try {
     await driver.pause(3000); // wait for app to load
+
+    // Search field
     await driver.$('//android.widget.TextView[@text="Search apps & games"]').click();
     await driver.$('//android.widget.EditText').setValue("Instagram");
-    await driver.pressKeyCode(66); // press Enter
+
+    // Press Enter
+    await driver.pressKeyCode(66);
+
     await driver.pause(10000); // wait for results
+
+    // Click first Install button (this locator may need update if UI changes)
     await driver.$('//androidx.compose.ui.platform.ComposeView/android.view.View/android.view.View/android.view.View[1]/android.view.View[1]/android.view.View[2]/android.widget.Button').click();
+
     await driver.saveScreenshot('./screenshot.png');
   } catch (err) {
     console.error("Test error:", err);
