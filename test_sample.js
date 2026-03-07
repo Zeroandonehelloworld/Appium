@@ -1,12 +1,10 @@
 const { remote } = require('webdriverio');
-const { execSync } = require('child_process'); // for adb commands
+const { execSync } = require('child_process');
 
 const capabilities = {
   platformName: 'Android',
   'appium:automationName': 'UiAutomator2',
   'appium:deviceName': 'emulator-5554',
-  
-  // NO appPackage / appActivity / appWait* → start blank session
   'appium:noReset': true,
   'appium:fullReset': false,
   'appium:autoGrantPermissions': true
@@ -22,42 +20,47 @@ const capabilities = {
   });
 
   try {
-    console.log('Blank session created. Manually launching Play Store...');
+    console.log('Blank session started. Launching Play Store via ADB...');
 
-    // Launch Play Store using ADB intent (most reliable way for system apps)
-    // This uses the standard launcher category – works on Android 14 emulator
+    // Reliable launcher intent for Play Store (works on Android 14+ emulator)
     execSync('adb shell am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n com.android.vending/.AssetBrowserActivity');
 
-    // Wait for Play Store to appear (adjust time if needed)
-    await driver.pause(15000);
+    await driver.pause(15000); // Wait for Play Store home to load
 
-    console.log('Play Store should be open now. Starting interactions...');
+    console.log('Play Store opened. Searching for Instagram...');
 
-    // Your test steps with waits
-    const searchField = await driver.$('//android.widget.TextView[@text="Search apps & games"]');
-    await searchField.waitForExist({ timeout: 30000 });
-    await searchField.click();
+    // Modern search bar locator (2025+ Play Store often uses this resource-id)
+    // Fallback to contains text if needed
+    let searchBar;
+    try {
+      searchBar = await driver.$('id=com.android.vending:id/search_box_text_input');
+      await searchBar.waitForExist({ timeout: 20000 });
+    } catch (e) {
+      console.log('Primary search id not found, trying fallback...');
+      searchBar = await driver.$('//android.widget.EditText[contains(@text, "Search")]');
+      await searchBar.waitForExist({ timeout: 15000 });
+    }
 
-    const input = await driver.$('//android.widget.EditText');
-    await input.waitForExist({ timeout: 15000 });
-    await input.setValue('Instagram');
+    await searchBar.click();
+    await searchBar.setValue('Instagram');
 
-    await driver.pressKeyCode(66); // Enter
+    await driver.pressKeyCode(66); // Enter key
 
-    await driver.pause(15000);
+    await driver.pause(15000); // Wait for results
 
+    // Install button – use text contains "Install" (more stable than compose path)
     const installBtn = await driver.$('//android.widget.Button[contains(@text, "Install")]');
     if (await installBtn.isExisting({ timeout: 10000 })) {
       await installBtn.click();
-      console.log('Clicked Install');
+      console.log('Clicked Install on Instagram');
     } else {
-      console.log('Install button not found');
+      console.log('Install button not found – UI changed or app already installed');
     }
 
     await driver.saveScreenshot('./screenshot.png');
-    console.log('Screenshot saved');
+    console.log('Test completed – screenshot saved');
   } catch (err) {
-    console.error('Test error:', err.message || err);
+    console.error('Test failed:', err.message || err);
   } finally {
     await driver.deleteSession();
   }
