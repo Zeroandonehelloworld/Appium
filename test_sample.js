@@ -1,21 +1,15 @@
 const { remote } = require('webdriverio');
+const { execSync } = require('child_process'); // for adb commands
 
 const capabilities = {
   platformName: 'Android',
-
   'appium:automationName': 'UiAutomator2',
   'appium:deviceName': 'emulator-5554',
-  'appium:appPackage': 'com.android.vending',
-
-  // Removed broken appActivity
-  // Added wildcard wait → this is the key fix
-  'appium:appWaitActivity': '*',
-  'appium:appWaitDuration': 60000,          // 60 seconds – give it plenty of time
-
+  
+  // NO appPackage / appActivity / appWait* → start blank session
   'appium:noReset': true,
   'appium:fullReset': false,
-  'appium:autoGrantPermissions': true,
-  'appium:appWaitForLaunch': true
+  'appium:autoGrantPermissions': true
 };
 
 (async () => {
@@ -28,14 +22,20 @@ const capabilities = {
   });
 
   try {
-    console.log('Session created – waiting for Play Store to appear...');
+    console.log('Blank session created. Manually launching Play Store...');
 
-    // Longer initial pause – Play Store can be very slow on fresh emulator
-    await driver.pause(10000);
+    // Launch Play Store using ADB intent (most reliable way for system apps)
+    // This uses the standard launcher category – works on Android 14 emulator
+    execSync('adb shell am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n com.android.vending/.AssetBrowserActivity');
 
-    // Try to locate search field with wait
+    // Wait for Play Store to appear (adjust time if needed)
+    await driver.pause(15000);
+
+    console.log('Play Store should be open now. Starting interactions...');
+
+    // Your test steps with waits
     const searchField = await driver.$('//android.widget.TextView[@text="Search apps & games"]');
-    await searchField.waitForExist({ timeout: 30000, interval: 1000 });
+    await searchField.waitForExist({ timeout: 30000 });
     await searchField.click();
 
     const input = await driver.$('//android.widget.EditText');
@@ -44,15 +44,14 @@ const capabilities = {
 
     await driver.pressKeyCode(66); // Enter
 
-    await driver.pause(15000); // wait for results
+    await driver.pause(15000);
 
-    // More reliable Install button locator (text-based)
     const installBtn = await driver.$('//android.widget.Button[contains(@text, "Install")]');
     if (await installBtn.isExisting({ timeout: 10000 })) {
       await installBtn.click();
-      console.log('Clicked Install button');
+      console.log('Clicked Install');
     } else {
-      console.log('No Install button found – Play Store UI may have changed');
+      console.log('Install button not found');
     }
 
     await driver.saveScreenshot('./screenshot.png');
