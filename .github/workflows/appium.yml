@@ -1,80 +1,63 @@
-name: Appium Android Tests
+const { remote } = require('webdriverio');
+const { execSync } = require('child_process');
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+const capabilities = {
+  platformName: 'Android',
+  'appium:automationName': 'UiAutomator2',
+  'appium:deviceName': 'emulator-5554',
+  'appium:noReset': true,
+  'appium:fullReset': false,
+  'appium:autoGrantPermissions': true
+};
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
+(async () => {
+  const driver = await remote({
+    protocol: 'http',
+    hostname: '127.0.0.1',
+    port: 4723,
+    path: '/',
+    capabilities,
+  });
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+  try {
+    console.log('Session created. Launching Play Store with monkey command...');
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+    // Use monkey to launch Play Store reliably (bypasses activity name issues)
+    execSync('adb shell monkey -p com.android.vending -c android.intent.category.LAUNCHER 1');
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+    await driver.pause(20000); // Longer wait – Play Store is slow on emulator
 
-      - name: Enable KVM (for emulator acceleration)
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+    console.log('Play Store should be open. Clicking search button...');
 
-      - name: Install Appium + UiAutomator2
-        env:
-          APPIUM_HOME: /home/runner/.appium
-        run: |
-          npm install -g appium@latest
-          appium driver install uiautomator2
-          appium driver list --installed
+    // Correct way to find element by content-desc (accessibility id)
+    const searchButton = await driver.$('~Search');  // ~ means accessibility id / content-desc
+    await searchButton.waitForExist({ timeout: 30000 });
+    await searchButton.click();
 
-      - name: Install project dependencies
-        run: npm install --legacy-peer-deps
+    await driver.pause(5000);
 
-      - name: Debug – show directory structure
-        run: |
-          pwd
-          ls -la
-          echo "No APK required – using system Play Store"
+    // Search input after clicking search button
+    const searchInput = await driver.$('//android.widget.EditText');
+    await searchInput.waitForExist({ timeout: 20000 });
+    await searchInput.setValue('Instagram');
 
-      - name: Run tests on emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        env:
-          APPIUM_HOME: /home/runner/.appium
-        with:
-          api-level: 34
-          arch: x86_64
-          profile: pixel_6
-          target: google_apis
-          avd-name: test_avd
-          force-avd-creation: false
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          disable-animations: true
-          script: |
-            appium --port 4723 --log appium.log --log-level info &
-            APPIUM_PID=$!
+    await driver.pressKeyCode(66); // Enter
 
-            # Better wait (using npx wait-on)
-            npx wait-on tcp:4723 --timeout 60000 --log --interval 3000 || { cat appium.log; kill $APPIUM_PID; exit 1; }
+    await driver.pause(15000);
 
-            echo "Appium server is ready!"
+    const installBtn = await driver.$('//android.widget.Button[contains(@text, "Install")]');
+    if (await installBtn.isExisting({ timeout: 10000 })) {
+      await installBtn.click();
+      console.log('Clicked Install');
+    } else {
+      console.log('No Install button found');
+    }
 
-            node test_sample.js
-            TEST_EXIT=$?
-
-            echo "=== Appium logs ==="
-            cat appium.log || true
-
-            kill $APPIUM_PID 2>/dev/null || true
-            exit $TEST_EXIT
+    await driver.saveScreenshot('./screenshot.png');
+    console.log('Test finished successfully');
+  } catch (err) {
+    console.error('Error:', err.message || err);
+  } finally {
+    await driver.deleteSession();
+  }
+})();
