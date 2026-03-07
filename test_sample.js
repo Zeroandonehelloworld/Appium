@@ -1,18 +1,21 @@
 const { remote } = require('webdriverio');
 
 const capabilities = {
-  platformName: 'Android',                          // standard W3C → no prefix
+  platformName: 'Android',
 
   'appium:automationName': 'UiAutomator2',
   'appium:deviceName': 'emulator-5554',
   'appium:appPackage': 'com.android.vending',
-  'appium:appActivity': 'com.google.android.finsky.activities.MainActivity',
+
+  // Removed broken appActivity
+  // Added wildcard wait → this is the key fix
+  'appium:appWaitActivity': '*',
+  'appium:appWaitDuration': 60000,          // 60 seconds – give it plenty of time
 
   'appium:noReset': true,
   'appium:fullReset': false,
   'appium:autoGrantPermissions': true,
-  'appium:appWaitForLaunch': true,
-  'appium:appWaitDuration': 45000
+  'appium:appWaitForLaunch': true
 };
 
 (async () => {
@@ -25,37 +28,37 @@ const capabilities = {
   });
 
   try {
-    // Give Play Store time to fully load (modern versions are slow on emulator)
-    await driver.pause(8000);
+    console.log('Session created – waiting for Play Store to appear...');
 
-    // Search field – added wait for reliability
+    // Longer initial pause – Play Store can be very slow on fresh emulator
+    await driver.pause(10000);
+
+    // Try to locate search field with wait
     const searchField = await driver.$('//android.widget.TextView[@text="Search apps & games"]');
-    await searchField.waitForExist({ timeout: 15000 });
+    await searchField.waitForExist({ timeout: 30000, interval: 1000 });
     await searchField.click();
 
     const input = await driver.$('//android.widget.EditText');
-    await input.waitForExist({ timeout: 10000 });
+    await input.waitForExist({ timeout: 15000 });
     await input.setValue('Instagram');
 
-    // Press Enter
-    await driver.pressKeyCode(66);
+    await driver.pressKeyCode(66); // Enter
 
-    await driver.pause(12000); // wait for search results
+    await driver.pause(15000); // wait for results
 
-    // Attempt to click Install button (this locator is fragile – may need update)
-    // Using simpler text-based selector instead of long compose path
-    const installBtn = await driver.$('//android.widget.Button[@text="Install"]');
-    if (await installBtn.isExisting({ timeout: 5000 })) {
+    // More reliable Install button locator (text-based)
+    const installBtn = await driver.$('//android.widget.Button[contains(@text, "Install")]');
+    if (await installBtn.isExisting({ timeout: 10000 })) {
       await installBtn.click();
       console.log('Clicked Install button');
     } else {
-      console.log('Install button not found with text "Install"');
+      console.log('No Install button found – Play Store UI may have changed');
     }
 
     await driver.saveScreenshot('./screenshot.png');
-    console.log('Screenshot saved as screenshot.png');
+    console.log('Screenshot saved');
   } catch (err) {
-    console.error('Test error:', err);
+    console.error('Test error:', err.message || err);
   } finally {
     await driver.deleteSession();
   }
