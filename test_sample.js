@@ -20,53 +20,43 @@ const capabilities = {
   });
 
   try {
-    console.log('Blank session started. Launching Play Store via ADB...');
+    console.log('Session created. Launching Play Store with monkey command...');
 
-    // Launch Play Store
-    execSync('adb shell am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n com.android.vending/.AssetBrowserActivity');
+    // Use monkey to launch Play Store reliably (bypasses activity name issues)
+    execSync('adb shell monkey -p com.android.vending -c android.intent.category.LAUNCHER 1');
 
-    await driver.pause(15000); // Wait for home to load
+    await driver.pause(20000); // Longer wait – Play Store is slow on emulator
 
-    console.log('Play Store opened. Clicking Search button in bottom bar...');
+    console.log('Play Store should be open. Clicking search button...');
 
-    // Click Search button in bottom nav (content-desc is reliable)
-    const searchButton = await driver.$('accessibility id=Search');
-    await searchButton.waitForExist({ timeout: 20000 });
+    // Correct way to find element by content-desc (accessibility id)
+    const searchButton = await driver.$('~Search');  // ~ means accessibility id / content-desc
+    await searchButton.waitForExist({ timeout: 30000 });
     await searchButton.click();
 
-    await driver.pause(5000); // Wait for search interface
+    await driver.pause(5000);
 
-    // Locate active search input (resource-id in recent Play Store)
-    let searchInput;
-    try {
-      searchInput = await driver.$('id=com.android.vending:id/search_box_text_input');
-      await searchInput.waitForExist({ timeout: 15000 });
-    } catch (e) {
-      console.log('Primary input id not found, trying fallback...');
-      searchInput = await driver.$('//android.widget.EditText');
-      await searchInput.waitForExist({ timeout: 15000 });
-    }
-
-    await searchInput.click();
+    // Search input after clicking search button
+    const searchInput = await driver.$('//android.widget.EditText');
+    await searchInput.waitForExist({ timeout: 20000 });
     await searchInput.setValue('Instagram');
 
     await driver.pressKeyCode(66); // Enter
 
-    await driver.pause(15000); // Wait for results
+    await driver.pause(15000);
 
-    // Install button
     const installBtn = await driver.$('//android.widget.Button[contains(@text, "Install")]');
     if (await installBtn.isExisting({ timeout: 10000 })) {
       await installBtn.click();
       console.log('Clicked Install');
     } else {
-      console.log('Install button not found');
+      console.log('No Install button found');
     }
 
     await driver.saveScreenshot('./screenshot.png');
-    console.log('Screenshot saved – test complete');
+    console.log('Test finished successfully');
   } catch (err) {
-    console.error('Test failed:', err.message || err);
+    console.error('Error:', err.message || err);
   } finally {
     await driver.deleteSession();
   }
