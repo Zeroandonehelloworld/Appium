@@ -8,158 +8,88 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest   # Android emulator runs best on Linux runners
+    runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── 2. Java (required by Android SDK / emulator) ───────────────────────
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # ── 3. Node.js ─────────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # ── 4. Android SDK + emulator ──────────────────────────────────────────
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android emulator packages
+      # Enable KVM for hardware acceleration (required on GitHub Actions)
+      - name: Enable KVM
         run: |
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-34" \
-            "system-images;android-34;google_apis;x86_64" \
-            "emulator"
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
-      - name: Create AVD
+      - name: Install Appium 3 + UiAutomator2
         run: |
-          echo "no" | avdmanager create avd \
-            --force \
-            --name "test_avd" \
-            --abi "google_apis/x86_64" \
-            --package "system-images;android-34;google_apis;x86_64" \
-            --device "pixel_6"
+          npm install -g appium@next
+          appium driver install uiautomator2
+          appium --version
 
-      - name: Start emulator (background)
-        run: |
-          $ANDROID_HOME/emulator/emulator \
-            -avd test_avd \
-            -no-window \
-            -no-audio \
-            -no-snapshot \
-            -gpu swiftshader_indirect &
-          echo "Emulator PID: $!"
-
-      - name: Wait for emulator to boot
-        run: |
-          $ANDROID_HOME/platform-tools/adb wait-for-device
-          # Poll until boot is complete
-          TIMEOUT=300
-          ELAPSED=0
-          echo "Waiting for emulator to fully boot..."
-          until $ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do
-            sleep 5
-            ELAPSED=$((ELAPSED + 5))
-            echo "  ${ELAPSED}s elapsed..."
-            if [ $ELAPSED -ge $TIMEOUT ]; then
-              echo "ERROR: Emulator did not boot within ${TIMEOUT}s"
-              exit 1
-            fi
-          done
-          echo "Emulator is ready!"
-          $ANDROID_HOME/platform-tools/adb devices
-
-      # ── 5. Install Appium 3 + UiAutomator2 driver ─────────────────────────
-      - name: Install Appium 3 globally
-        run: npm install -g appium@next
-
-      - name: Verify Appium version
-        run: appium --version
-
-      - name: Install UiAutomator2 driver
-        run: appium driver install uiautomator2
-
-      - name: Verify drivers installed
-        run: appium driver list --installed
-
-      # ── 6. Install project dependencies ───────────────────────────────────
       - name: Install project dependencies
         run: npm install --legacy-peer-deps
-
-      # ── 7. Start Appium server ─────────────────────────────────────────────
-      - name: Start Appium server
-        run: |
-          appium --port 4723 \
-                 --log appium.log \
-                 --log-level info &
-          echo "Appium PID: $!"
-
-      - name: Wait for Appium to be ready
-        run: |
-          TIMEOUT=60
-          ELAPSED=0
-          echo "Waiting for Appium to start..."
-          sleep 5
-          until curl -sf http://127.0.0.1:4723/status > /dev/null 2>&1; do
-            sleep 3
-            ELAPSED=$((ELAPSED + 3))
-            echo "  ${ELAPSED}s elapsed..."
-            if [ $ELAPSED -ge $TIMEOUT ]; then
-              echo "=== appium.log ==="
-              cat appium.log || true
-              echo "ERROR: Appium did not start within ${TIMEOUT}s"
-              exit 1
-            fi
-          done
-          echo "Appium is ready!"
-          curl -s http://127.0.0.1:4723/status | python3 -m json.tool
-
-      # ── 8. APK – upload yours as a repo file OR a GitHub secret URL ────────
-      #   Option A (simplest): commit your APK to the repo at ./app/app.apk
-      #   Option B: download from a URL stored in a secret
-      #
-      # Uncomment whichever option you use:
-      #
-      # --- Option B ---
-      # - name: Download APK
-      #   run: |
-      #     curl -L "${{ secrets.APK_DOWNLOAD_URL }}" -o app/app.apk
-      #     ls -lh app/app.apk
 
       - name: Verify APK exists
         run: |
           if [ ! -f "app/app.apk" ]; then
-            echo "-------------------------------------------------------"
-            echo "  APK NOT FOUND at app/app.apk"
-            echo "  Fix: commit your APK to the repo at  ./app/app.apk"
-            echo "  OR uncomment the 'Download APK' step above and add"
-            echo "  APK_DOWNLOAD_URL to your GitHub repository secrets."
-            echo "-------------------------------------------------------"
+            echo "APK NOT FOUND at app/app.apk"
+            echo "Commit your APK to ./app/app.apk OR uncomment the download step"
             exit 1
           fi
           echo "APK found: $(ls -lh app/app.apk)"
 
-      # ── 9. Run tests ───────────────────────────────────────────────────────
-      - name: Run Appium tests
-        run: node test_sample.js
+      # This action handles: AVD creation, emulator boot, KVM, wait-for-boot
+      - name: Run tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          target: google_apis
+          avd-name: test_avd
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            # Start Appium in background
+            appium --port 4723 --log appium.log --log-level info &
+            APPIUM_PID=$!
+            echo "Appium PID: $APPIUM_PID"
 
-      # ── 10. Always print logs ──────────────────────────────────────────────
-      - name: Print Appium logs
-        if: always()
-        run: |
-          echo "=== appium.log ==="
-          cat appium.log || echo "(no appium.log found)"
+            # Wait for Appium ready
+            TIMEOUT=60
+            ELAPSED=0
+            until curl -sf http://127.0.0.1:4723/status > /dev/null 2>&1; do
+              sleep 3
+              ELAPSED=$((ELAPSED + 3))
+              echo "Waiting for Appium... ${ELAPSED}s"
+              if [ $ELAPSED -ge $TIMEOUT ]; then
+                echo "=== appium.log ==="
+                cat appium.log || true
+                exit 1
+              fi
+            done
+            echo "Appium is ready!"
 
-      - name: Print ADB logcat (on failure)
-        if: failure()
-        run: |
-          $ANDROID_HOME/platform-tools/adb logcat -d -t 200 || true
+            # Run tests
+            node test_sample.js
+            TEST_EXIT=$?
+
+            # Print logs
+            echo "=== appium.log ==="
+            cat appium.log || true
+
+            kill $APPIUM_PID 2>/dev/null || true
+            exit $TEST_EXIT
