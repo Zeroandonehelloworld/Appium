@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -30,36 +31,22 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Install Appium + UiAutomator2 driver
+      - name: Install Appium + UiAutomator2
         env:
           APPIUM_HOME: /home/runner/.appium
         run: |
           npm install -g appium@latest
-          appium driver install uiautomator2  # no @6 needed anymore in recent Appium
+          appium driver install uiautomator2
           appium driver list --installed
 
       - name: Install project dependencies
         run: npm install --legacy-peer-deps
 
-      # Debug: show what's actually in the repo
-      - name: Debug – list repo contents and find APKs
+      - name: Debug – show directory structure
         run: |
           pwd
           ls -la
-          ls -la app 2>/dev/null || echo "No 'app' folder yet"
-          find . -type f -name "*.apk" -o -name "*.yml" || echo "No APK found"
-          echo "If APK is missing → commit it to app/app.apk and push"
-
-      - name: Verify APK exists (temporary – will fail until you add it)
-        run: |
-          APK_PATH="app/app.apk"
-          if [ ! -f "$APK_PATH" ]; then
-            echo "APK NOT FOUND at $APK_PATH – please commit/upload it"
-            echo "Once added, this step will pass"
-            ls -lh app/ 2>/dev/null || true
-            exit 0   # ← changed to exit 0 so workflow continues (warning only)
-          fi
-          echo "APK found: $(ls -lh $APK_PATH)"
+          echo "No APK required – using system Play Store"
 
       - name: Run tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -77,11 +64,17 @@ jobs:
           script: |
             appium --port 4723 --log appium.log --log-level info &
             APPIUM_PID=$!
+
+            # Better wait (using npx wait-on)
             npx wait-on tcp:4723 --timeout 60000 --log --interval 3000 || { cat appium.log; kill $APPIUM_PID; exit 1; }
+
             echo "Appium server is ready!"
+
             node test_sample.js
             TEST_EXIT=$?
+
             echo "=== Appium logs ==="
             cat appium.log || true
+
             kill $APPIUM_PID 2>/dev/null || true
             exit $TEST_EXIT
