@@ -1,63 +1,79 @@
-const { remote } = require('webdriverio');
-const { execSync } = require('child_process');
+name: Appium Android Tests
 
-const capabilities = {
-  platformName: 'Android',
-  'appium:automationName': 'UiAutomator2',
-  'appium:deviceName': 'emulator-5554',
-  'appium:noReset': true,
-  'appium:fullReset': false,
-  'appium:autoGrantPermissions': true
-};
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
-(async () => {
-  const driver = await remote({
-    protocol: 'http',
-    hostname: '127.0.0.1',
-    port: 4723,
-    path: '/',
-    capabilities,
-  });
+jobs:
+  test:
+    runs-on: ubuntu-latest
 
-  try {
-    console.log('Session created. Launching Play Store with monkey command...');
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    // Use monkey to launch Play Store reliably (bypasses activity name issues)
-    execSync('adb shell monkey -p com.android.vending -c android.intent.category.LAUNCHER 1');
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-    await driver.pause(20000); // Longer wait – Play Store is slow on emulator
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-    console.log('Play Store should be open. Clicking search button...');
+      - name: Enable KVM acceleration for emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
-    // Correct way to find element by content-desc (accessibility id)
-    const searchButton = await driver.$('~Search');  // ~ means accessibility id / content-desc
-    await searchButton.waitForExist({ timeout: 30000 });
-    await searchButton.click();
+      - name: Install Appium + UiAutomator2 driver
+        env:
+          APPIUM_HOME: /home/runner/.appium
+        run: |
+          npm install -g appium@latest
+          appium driver install uiautomator2
+          appium driver list --installed
 
-    await driver.pause(5000);
+      - name: Install project dependencies
+        run: npm install --legacy-peer-deps
 
-    // Search input after clicking search button
-    const searchInput = await driver.$('//android.widget.EditText');
-    await searchInput.waitForExist({ timeout: 20000 });
-    await searchInput.setValue('Instagram');
+      - name: Debug – show basic environment info
+        run: |
+          pwd
+          ls -la
+          echo "Testing with built-in Play Store (no APK needed)"
 
-    await driver.pressKeyCode(66); // Enter
+      - name: Run Appium tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          APPIUM_HOME: /home/runner/.appium
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          target: google_apis
+          avd-name: test_avd
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            appium --port 4723 --log appium.log --log-level info &
+            APPIUM_PID=$!
 
-    await driver.pause(15000);
+            npx wait-on tcp:4723 --timeout 60000 --log --interval 3000 || { cat appium.log; kill $APPIUM_PID; exit 1; }
 
-    const installBtn = await driver.$('//android.widget.Button[contains(@text, "Install")]');
-    if (await installBtn.isExisting({ timeout: 10000 })) {
-      await installBtn.click();
-      console.log('Clicked Install');
-    } else {
-      console.log('No Install button found');
-    }
+            echo "Appium server is ready!"
 
-    await driver.saveScreenshot('./screenshot.png');
-    console.log('Test finished successfully');
-  } catch (err) {
-    console.error('Error:', err.message || err);
-  } finally {
-    await driver.deleteSession();
-  }
-})();
+            node test_sample.js
+            TEST_EXIT=$?
+
+            echo "=== Appium logs ==="
+            cat appium.log || true
+
+            kill $APPIUM_PID 2>/dev/null || true
+            exit $TEST_EXIT
