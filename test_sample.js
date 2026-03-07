@@ -20,23 +20,22 @@ const capabilities = {
   });
 
   try {
-    console.log('Session created. Launching Play Store with monkey command...');
+    console.log('Session created. Launching Play Store...');
 
-    // Use monkey to launch Play Store reliably (bypasses activity name issues)
-    execSync('adb shell monkey -p com.android.vending -c android.intent.category.LAUNCHER 1');
+    // This line fixes the launch error
+    execSync('adb shell am start -n com.android.vending/.AssetBrowserActivity');
 
-    await driver.pause(20000); // Longer wait – Play Store is slow on emulator
+    await driver.pause(20000); // Wait for Play Store to fully open
 
     console.log('Play Store should be open. Clicking search button...');
 
-    // Correct way to find element by content-desc (accessibility id)
-    const searchButton = await driver.$('~Search');  // ~ means accessibility id / content-desc
+    // Correct accessibility id syntax
+    const searchButton = await driver.$('~Search');
     await searchButton.waitForExist({ timeout: 30000 });
     await searchButton.click();
 
     await driver.pause(5000);
 
-    // Search input after clicking search button
     const searchInput = await driver.$('//android.widget.EditText');
     await searchInput.waitForExist({ timeout: 20000 });
     await searchInput.setValue('Instagram');
@@ -54,7 +53,7 @@ const capabilities = {
     }
 
     await driver.saveScreenshot('./screenshot.png');
-    console.log('Test finished successfully');
+    console.log('Test finished – screenshot saved');
   } catch (err) {
     console.error('Error:', err.message || err);
   } finally {
