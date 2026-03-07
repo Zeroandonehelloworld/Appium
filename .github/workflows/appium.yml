@@ -9,7 +9,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -31,27 +30,26 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # APPIUM_HOME isolates driver installs from your project's package.json
-      # uiautomator2@6 is the last version compatible with Appium 2.x
-      - name: Install Appium 2 + UiAutomator2 v6
+      - name: Install Appium + UiAutomator2
         env:
           APPIUM_HOME: /home/runner/.appium
         run: |
           npm install -g appium@latest
-          appium --version
-          appium driver install uiautomator2@6
+          appium driver install uiautomator2
           appium driver list --installed
 
       - name: Install project dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Verify APK exists
+      # ── Add your build step here ────────────────────────────────
+      - name: Build debug APK           # ← most important missing piece
+        run: ./gradlew assembleDebug    # adjust command / module if needed
+
+      - name: Debug – show APK location
         run: |
-          if [ ! -f "app/app.apk" ]; then
-            echo "APK NOT FOUND at app/app.apk"
-            exit 1
-          fi
-          echo "APK found: $(ls -lh app/app.apk)"
+          pwd
+          find . -name "*.apk" || true
+          ls -la app/build/outputs/apk/debug || true
 
       - name: Run tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -66,28 +64,15 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
+          working-directory: .     # usually not needed, but can help
           script: |
             appium --port 4723 --log appium.log --log-level info &
             APPIUM_PID=$!
-
-            TIMEOUT=60
-            ELAPSED=0
-            until curl -sf http://127.0.0.1:4723/status > /dev/null 2>&1; do
-              sleep 3
-              ELAPSED=$((ELAPSED + 3))
-              echo "Waiting for Appium... ${ELAPSED}s"
-              if [ $ELAPSED -ge $TIMEOUT ]; then
-                cat appium.log || true
-                exit 1
-              fi
-            done
+            npx wait-on http://127.0.0.1:4723/status --timeout 60000 || { cat appium.log; kill $APPIUM_PID; exit 1; }
             echo "Appium is ready!"
-
             node test_sample.js
             TEST_EXIT=$?
-
-            echo "=== appium.log ==="
             cat appium.log || true
-
             kill $APPIUM_PID 2>/dev/null || true
             exit $TEST_EXIT
+            
