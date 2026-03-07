@@ -1,4 +1,4 @@
-name: Appium Tests
+name: Appium Android Tests
 
 on:
   push:
@@ -8,131 +8,158 @@ on:
 
 jobs:
   test:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest   # Android emulator runs best on Linux runners
 
     steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
+      # ── 2. Java (required by Android SDK / emulator) ───────────────────────
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ── 3. Node.js ─────────────────────────────────────────────────────────
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+      # ── 4. Android SDK + emulator ──────────────────────────────────────────
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Set npm config
-        run: npm config set legacy-peer-deps true
-
-      - name: Remove stale lockfile
+      - name: Install Android emulator packages
         run: |
-          if (Test-Path package-lock.json) { Remove-Item package-lock.json -Force }
-        shell: powershell
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-34" \
+            "system-images;android-34;google_apis;x86_64" \
+            "emulator"
 
-      - name: Force local appium to v3
+      - name: Create AVD
         run: |
-          npm uninstall appium --legacy-peer-deps
-          npm install appium@next --save --legacy-peer-deps
+          echo "no" | avdmanager create avd \
+            --force \
+            --name "test_avd" \
+            --abi "google_apis/x86_64" \
+            --package "system-images;android-34;google_apis;x86_64" \
+            --device "pixel_6"
 
-      - name: Install project dependencies
-        run: npm install --legacy-peer-deps
+      - name: Start emulator (background)
+        run: |
+          $ANDROID_HOME/emulator/emulator \
+            -avd test_avd \
+            -no-window \
+            -no-audio \
+            -no-snapshot \
+            -gpu swiftshader_indirect &
+          echo "Emulator PID: $!"
 
+      - name: Wait for emulator to boot
+        run: |
+          $ANDROID_HOME/platform-tools/adb wait-for-device
+          # Poll until boot is complete
+          TIMEOUT=300
+          ELAPSED=0
+          echo "Waiting for emulator to fully boot..."
+          until $ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+            echo "  ${ELAPSED}s elapsed..."
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "ERROR: Emulator did not boot within ${TIMEOUT}s"
+              exit 1
+            fi
+          done
+          echo "Emulator is ready!"
+          $ANDROID_HOME/platform-tools/adb devices
+
+      # ── 5. Install Appium 3 + UiAutomator2 driver ─────────────────────────
       - name: Install Appium 3 globally
         run: npm install -g appium@next
 
-      - name: Verify Appium version (must be 3.x)
+      - name: Verify Appium version
         run: appium --version
 
-      - name: Install Appium Windows Driver
-        run: appium driver install --source=npm appium-windows-driver
+      - name: Install UiAutomator2 driver
+        run: appium driver install uiautomator2
 
-      - name: Verify Windows Driver installed
+      - name: Verify drivers installed
         run: appium driver list --installed
 
+      # ── 6. Install project dependencies ───────────────────────────────────
+      - name: Install project dependencies
+        run: npm install --legacy-peer-deps
+
+      # ── 7. Start Appium server ─────────────────────────────────────────────
       - name: Start Appium server
-        shell: powershell
         run: |
-          # Use the .cmd wrapper — avoids spawn EINVAL from passing .ps1 or .js paths to node
-          $npmPrefix = npm prefix -g
-          $appiumCmd = "$npmPrefix\appium.cmd"
-          Write-Host "Appium cmd path: $appiumCmd"
-
-          if (-not (Test-Path $appiumCmd)) {
-            # fallback: search common locations
-            $appiumCmd = "C:\npm\prefix\appium.cmd"
-            Write-Host "Fallback path: $appiumCmd"
-          }
-
-          $psi = New-Object System.Diagnostics.ProcessStartInfo
-          $psi.FileName = $appiumCmd
-          $psi.Arguments = "--port 4723"
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
-          $psi.UseShellExecute = $false
-          $psi.CreateNoWindow = $true
-
-          $process = New-Object System.Diagnostics.Process
-          $process.StartInfo = $psi
-
-          # Async log capture to files
-          $outFile = [System.IO.StreamWriter]::new("appium.log", $false)
-          $errFile = [System.IO.StreamWriter]::new("appium-error.log", $false)
-
-          $process.add_OutputDataReceived({ param($s,$e) if ($e.Data) { $outFile.WriteLine($e.Data); $outFile.Flush() } })
-          $process.add_ErrorDataReceived({ param($s,$e) if ($e.Data) { $errFile.WriteLine($e.Data); $errFile.Flush() } })
-
-          $process.Start() | Out-Null
-          $process.BeginOutputReadLine()
-          $process.BeginErrorReadLine()
-
-          Write-Host "Appium started with PID: $($process.Id)"
+          appium --port 4723 \
+                 --log appium.log \
+                 --log-level info &
+          echo "Appium PID: $!"
 
       - name: Wait for Appium to be ready
-        shell: powershell
         run: |
-          $timeout = 120
-          $elapsed = 0
-          $ready = $false
+          TIMEOUT=60
+          ELAPSED=0
+          echo "Waiting for Appium to start..."
+          sleep 5
+          until curl -sf http://127.0.0.1:4723/status > /dev/null 2>&1; do
+            sleep 3
+            ELAPSED=$((ELAPSED + 3))
+            echo "  ${ELAPSED}s elapsed..."
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "=== appium.log ==="
+              cat appium.log || true
+              echo "ERROR: Appium did not start within ${TIMEOUT}s"
+              exit 1
+            fi
+          done
+          echo "Appium is ready!"
+          curl -s http://127.0.0.1:4723/status | python3 -m json.tool
 
-          Write-Host "Waiting for Appium to initialize..."
-          Start-Sleep -Seconds 10
+      # ── 8. APK – upload yours as a repo file OR a GitHub secret URL ────────
+      #   Option A (simplest): commit your APK to the repo at ./app/app.apk
+      #   Option B: download from a URL stored in a secret
+      #
+      # Uncomment whichever option you use:
+      #
+      # --- Option B ---
+      # - name: Download APK
+      #   run: |
+      #     curl -L "${{ secrets.APK_DOWNLOAD_URL }}" -o app/app.apk
+      #     ls -lh app/app.apk
 
-          while ($elapsed -lt $timeout) {
-            Start-Sleep -Seconds 3
-            $elapsed += 3
-            try {
-              $response = Invoke-WebRequest -Uri "http://127.0.0.1:4723/status" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
-              $statusCode = $response.StatusCode
-              Write-Host "HTTP status: $statusCode (${elapsed}s elapsed)"
-              if ($statusCode -eq 200) {
-                Write-Host "Appium is ready!"
-                $ready = $true
-                break
-              }
-            } catch {
-              Write-Host "Not ready yet (${elapsed}s elapsed): $_"
-            }
-          }
+      - name: Verify APK exists
+        run: |
+          if [ ! -f "app/app.apk" ]; then
+            echo "-------------------------------------------------------"
+            echo "  APK NOT FOUND at app/app.apk"
+            echo "  Fix: commit your APK to the repo at  ./app/app.apk"
+            echo "  OR uncomment the 'Download APK' step above and add"
+            echo "  APK_DOWNLOAD_URL to your GitHub repository secrets."
+            echo "-------------------------------------------------------"
+            exit 1
+          fi
+          echo "APK found: $(ls -lh app/app.apk)"
 
-          if (-not $ready) {
-            Write-Host "=== appium.log ==="
-            Get-Content appium.log -ErrorAction SilentlyContinue
-            Write-Host "=== appium-error.log ==="
-            Get-Content appium-error.log -ErrorAction SilentlyContinue
-            throw "Appium did not start within $timeout seconds"
-          }
-
-      - name: Run tests
+      # ── 9. Run tests ───────────────────────────────────────────────────────
+      - name: Run Appium tests
         run: node test_sample.js
 
+      # ── 10. Always print logs ──────────────────────────────────────────────
       - name: Print Appium logs
         if: always()
-        shell: powershell
         run: |
-          Write-Host "=== appium.log ==="
-          Get-Content appium.log -ErrorAction SilentlyContinue
-          Write-Host "=== appium-error.log ==="
-          Get-Content appium-error.log -ErrorAction SilentlyContinue
+          echo "=== appium.log ==="
+          cat appium.log || echo "(no appium.log found)"
+
+      - name: Print ADB logcat (on failure)
+        if: failure()
+        run: |
+          $ANDROID_HOME/platform-tools/adb logcat -d -t 200 || true
