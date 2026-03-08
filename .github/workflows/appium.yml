@@ -65,7 +65,9 @@ jobs:
             APPIUM_PID=$!
 
             echo "Waiting for Appium to be ready (with retries)..."
-            for i in {1..12}; do
+            i=1
+            while [ $i -le 12 ]
+            do
               echo "Attempt $i/12: Checking port 4723..."
               if npx wait-on tcp:4723 --timeout 90000 --log; then
                 echo "Appium is ready!"
@@ -73,6 +75,7 @@ jobs:
               fi
               echo "Not ready yet, waiting 30s more..."
               sleep 30
+              i=$((i+1))
             done
 
             if ! npx wait-on tcp:4723 --timeout 10000; then
