@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25               # Safety net for slow boots/installs
+    timeout-minutes: 25
 
     steps:
       - name: Checkout code
@@ -24,7 +24,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'              # ← Changed: more stable for Appium CI
+          node-version: '20'  # ← Switched back to 20 to avoid joi EBADENGINE warning with wait-on deps
 
       - name: Enable KVM acceleration for emulator
         run: |
@@ -33,13 +33,12 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Install Appium + UiAutomator2 driver (with debug)
-        continue-on-error: true           # ← Temporarily to see failure reason
         run: |
-          npm install -g appium@2.5.4 --verbose || echo "Appium install FAILED - check verbose logs above"
-          appium driver install uiautomator2@3.0.3 || echo "uiautomator2 install FAILED"
-          appium driver list --installed || echo "Driver list failed"
-          appium --version || echo "Appium version check failed"
-          which appium || echo "appium binary not found"
+          npm install -g appium@2.5.4 --verbose
+          appium driver install uiautomator2@3.0.3
+          appium driver list --installed
+          appium --version
+          which appium
 
       - name: Install project dependencies (with verbose)
         run: npm install --legacy-peer-deps --verbose
@@ -56,33 +55,35 @@ jobs:
         with:
           api-level: 33
           arch: x86_64
-          profile: pixel_5                # Light & fast
+          profile: pixel_5
           target: google_apis
           avd-name: test_avd
-          force-avd-creation: true        # ← Force for clean debug run
+          force-avd-creation: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
           script: |
-            echo "Starting Appium in debug mode..."
-            appium --port 4723 --log appium.log --log-level debug &
+            echo "Starting Appium in debug mode on localhost..."
+            appium --address 127.0.0.1 --port 4723 --log appium.log --log-level debug &
             APPIUM_PID=$!
 
-            echo "Waiting for Appium to listen..."
-            npx wait-on tcp:4723 --timeout 180000 --log --interval 5000 || { cat appium.log; kill $APPIUM_PID; exit 1; }
-            echo "Appium server is ready!"
+            echo "Waiting for Appium HTTP endpoint (more reliable than plain TCP)..."
+            npx wait-on --timeout 240000 --interval 5000 --log http-get://127.0.0.1:4723/status || { cat appium.log; kill $APPIUM_PID; exit 1; }
+            echo "Appium server is ready and responding!"
 
-            echo "Checking devices & boot status..."
+            echo "Quick checks:"
             adb devices
-            adb wait-for-device
+            curl -s http://127.0.0.1:4723/status || echo "Curl status check failed"
 
+            echo "Waiting for emulator full boot..."
+            adb wait-for-device
             until adb shell getprop sys.boot_completed | grep -q "1"; do
               echo "Emulator still booting..."
               sleep 6
             done
             echo "Emulator fully booted!"
 
-            adb shell input keyevent 82 &>/dev/null || true  # Unlock if needed
-            sleep 10  # Extra stability buffer
+            adb shell input keyevent 82 &>/dev/null || true
+            sleep 10
 
             echo "Running your test script..."
             node test_sample.js
