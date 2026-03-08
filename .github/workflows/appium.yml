@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20               # Prevent infinite hangs
 
     steps:
       - name: Checkout code
@@ -32,8 +33,6 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Install Appium + UiAutomator2 driver
-        env:
-          APPIUM_HOME: /home/runner/.appium
         run: |
           npm install -g appium@latest
           appium driver install uiautomator2
@@ -50,12 +49,10 @@ jobs:
 
       - name: Run Appium tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
-        env:
-          APPIUM_HOME: /home/runner/.appium
         with:
-          api-level: 34
+          api-level: 33                     # ← changed: 34 is too slow/heavy
           arch: x86_64
-          profile: pixel_6
+          profile: pixel_5                  # ← changed: pixel_6 too heavy → pixel_5 or pixel_4 faster
           target: google_apis
           avd-name: test_avd
           force-avd-creation: false
@@ -65,9 +62,21 @@ jobs:
             appium --port 4723 --log appium.log --log-level info &
             APPIUM_PID=$!
 
-            npx wait-on tcp:4723 --timeout 60000 --log --interval 3000 || { cat appium.log; kill $APPIUM_PID; exit 1; }
-
+            npx wait-on tcp:4723 --timeout 120000 --log --interval 3000 || { cat appium.log; kill $APPIUM_PID; exit 1; }
             echo "Appium server is ready!"
+
+            # Critical: wait until emulator is fully booted (prevents session hang)
+            echo "Waiting for emulator to fully boot..."
+            adb wait-for-device
+            adb shell input keyevent 82 &  # unlock if locked
+            until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ] ; do
+              echo "Still waiting for boot completion..."
+              sleep 5
+            done
+            echo "Emulator boot completed!"
+
+            # Optional: give a few extra seconds for system stability
+            sleep 10
 
             node test_sample.js
             TEST_EXIT=$?
