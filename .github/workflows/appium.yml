@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20               # Prevent infinite hangs
+    timeout-minutes: 25               # Safety net for slow boots/installs
 
     steps:
       - name: Checkout code
@@ -24,7 +24,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '18'              # ← Changed: more stable for Appium CI
 
       - name: Enable KVM acceleration for emulator
         run: |
@@ -32,56 +32,63 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Install Appium + UiAutomator2 driver
+      - name: Install Appium + UiAutomator2 driver (with debug)
+        continue-on-error: true           # ← Temporarily to see failure reason
         run: |
-          npm install -g appium@latest
-          appium driver install uiautomator2
-          appium driver list --installed
+          npm install -g appium@2.5.4 --verbose || echo "Appium install FAILED - check verbose logs above"
+          appium driver install uiautomator2@3.0.3 || echo "uiautomator2 install FAILED"
+          appium driver list --installed || echo "Driver list failed"
+          appium --version || echo "Appium version check failed"
+          which appium || echo "appium binary not found"
 
-      - name: Install project dependencies
-        run: npm install --legacy-peer-deps
+      - name: Install project dependencies (with verbose)
+        run: npm install --legacy-peer-deps --verbose
 
-      - name: Debug – show basic environment info
+      - name: Debug – show environment info
         run: |
           pwd
           ls -la
+          npm list -g --depth=0 || true
           echo "Testing with built-in Play Store (no APK needed)"
 
       - name: Run Appium tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 33                     # ← changed: 34 is too slow/heavy
+          api-level: 33
           arch: x86_64
-          profile: pixel_5                  # ← changed: pixel_6 too heavy → pixel_5 or pixel_4 faster
+          profile: pixel_5                # Light & fast
           target: google_apis
           avd-name: test_avd
-          force-avd-creation: false
+          force-avd-creation: true        # ← Force for clean debug run
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
           script: |
-            appium --port 4723 --log appium.log --log-level info &
+            echo "Starting Appium in debug mode..."
+            appium --port 4723 --log appium.log --log-level debug &
             APPIUM_PID=$!
 
-            npx wait-on tcp:4723 --timeout 120000 --log --interval 3000 || { cat appium.log; kill $APPIUM_PID; exit 1; }
+            echo "Waiting for Appium to listen..."
+            npx wait-on tcp:4723 --timeout 180000 --log --interval 5000 || { cat appium.log; kill $APPIUM_PID; exit 1; }
             echo "Appium server is ready!"
 
-            # Critical: wait until emulator is fully booted (prevents session hang)
-            echo "Waiting for emulator to fully boot..."
+            echo "Checking devices & boot status..."
+            adb devices
             adb wait-for-device
-            adb shell input keyevent 82 &  # unlock if locked
-            until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ] ; do
-              echo "Still waiting for boot completion..."
-              sleep 5
+
+            until adb shell getprop sys.boot_completed | grep -q "1"; do
+              echo "Emulator still booting..."
+              sleep 6
             done
-            echo "Emulator boot completed!"
+            echo "Emulator fully booted!"
 
-            # Optional: give a few extra seconds for system stability
-            sleep 10
+            adb shell input keyevent 82 &>/dev/null || true  # Unlock if needed
+            sleep 10  # Extra stability buffer
 
+            echo "Running your test script..."
             node test_sample.js
             TEST_EXIT=$?
 
-            echo "=== Appium logs ==="
+            echo "=== Full Appium logs ==="
             cat appium.log || true
 
             kill $APPIUM_PID 2>/dev/null || true
