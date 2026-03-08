@@ -9,7 +9,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
 
     steps:
       - name: Checkout code
@@ -24,7 +23,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'  # ← Switched back to 20 to avoid joi EBADENGINE warning with wait-on deps
+          node-version: '20'
 
       - name: Enable KVM acceleration for emulator
         run: |
@@ -32,64 +31,62 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Install Appium + UiAutomator2 driver (with debug)
+      - name: Install Appium + UiAutomator2 driver
+        env:
+          APPIUM_HOME: /home/runner/.appium
         run: |
-          npm install -g appium@2.5.4 --verbose
-          appium driver install uiautomator2@3.0.3
+          npm install -g appium@latest
+          appium driver install uiautomator2
           appium driver list --installed
-          appium --version
-          which appium
 
-      - name: Install project dependencies (with verbose)
-        run: npm install --legacy-peer-deps --verbose
+      - name: Install project dependencies
+        run: npm install --legacy-peer-deps
 
-      - name: Debug – show environment info
+      - name: Debug – show basic environment info
         run: |
           pwd
           ls -la
-          npm list -g --depth=0 || true
           echo "Testing with built-in Play Store (no APK needed)"
 
       - name: Run Appium tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 33
+          api-level: 34
           arch: x86_64
-          profile: pixel_5
+          profile: pixel_6
           target: google_apis
           avd-name: test_avd
-          force-avd-creation: true
+          force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
           script: |
-            echo "Starting Appium in debug mode on localhost..."
-            appium --address 127.0.0.1 --port 4723 --log appium.log --log-level debug &
+            echo "Starting Appium..."
+            appium --port 4723 --log appium.log --log-level info &
             APPIUM_PID=$!
 
-            echo "Waiting for Appium HTTP endpoint (more reliable than plain TCP)..."
-            npx wait-on --timeout 240000 --interval 5000 --log http-get://127.0.0.1:4723/status || { cat appium.log; kill $APPIUM_PID; exit 1; }
-            echo "Appium server is ready and responding!"
-
-            echo "Quick checks:"
-            adb devices
-            curl -s http://127.0.0.1:4723/status || echo "Curl status check failed"
-
-            echo "Waiting for emulator full boot..."
-            adb wait-for-device
-            until adb shell getprop sys.boot_completed | grep -q "1"; do
-              echo "Emulator still booting..."
-              sleep 6
+            echo "Waiting for Appium to be ready (with retries)..."
+            for i in {1..12}; do
+              echo "Attempt $i/12: Checking port 4723..."
+              if npx wait-on tcp:4723 --timeout 90000 --log; then
+                echo "Appium is ready!"
+                break
+              fi
+              echo "Not ready yet, waiting 30s more..."
+              sleep 30
             done
-            echo "Emulator fully booted!"
 
-            adb shell input keyevent 82 &>/dev/null || true
-            sleep 10
+            if ! npx wait-on tcp:4723 --timeout 10000; then
+              echo "Appium failed to start after retries"
+              cat appium.log
+              kill $APPIUM_PID || true
+              exit 1
+            fi
 
-            echo "Running your test script..."
+            echo "Appium server is ready! Running tests..."
             node test_sample.js
             TEST_EXIT=$?
 
-            echo "=== Full Appium logs ==="
+            echo "=== Appium logs ==="
             cat appium.log || true
 
             kill $APPIUM_PID 2>/dev/null || true
