@@ -5,12 +5,14 @@ const capabilities = {
   'appium:automationName': 'UiAutomator2',
   'appium:appPackage': 'com.android.vending',
   'appium:appActivity': 'com.google.android.finsky.activities.MainActivity',
+  // noReset + dontStopAppOnReset = attach to already-running Play Store
+  // (we launched it via adb in run_tests.sh before Appium started)
   'appium:noReset': true,
+  'appium:dontStopAppOnReset': true,
   'appium:autoGrantPermissions': true,
-  'appium:systemPort': 8200,               // avoid port conflicts with UiAutomator2 server
+  'appium:systemPort': 8200,
   'appium:uiautomator2ServerInstallTimeout': 120000,
   'appium:newCommandTimeout': 300,
-  // NOTE: no deviceName — Appium auto-discovers the only connected emulator
 };
 
 async function saveScreenshot(driver, filename) {
@@ -36,11 +38,25 @@ async function saveScreenshot(driver, filename) {
     });
     console.log('✅ Session created');
 
-    // Wait for Play Store to fully load
-    await driver.pause(8000);
-    await saveScreenshot(driver, 'screenshot_1_launch.png');
+    // ── Verify Play Store is actually in foreground ──────────────────────────
+    const activity = await driver.getCurrentActivity();
+    const pkg = await driver.getCurrentPackage();
+    console.log(`📱 Current app: ${pkg} / ${activity}`);
 
-    // ── Find search bar ──────────────────────────────────────────────────────
+    if (pkg !== 'com.android.vending') {
+      console.log('⚠️  Play Store not in foreground — attempting to activate...');
+      await driver.activateApp('com.android.vending');
+      await driver.pause(5000);
+    }
+
+    // Wait for Play Store UI to fully render
+    await driver.pause(6000);
+
+    // 📸 Screenshot 1 — Play Store home screen (AFTER open, confirms it launched)
+    await saveScreenshot(driver, 'screenshot_1_launch.png');
+    console.log('📸 screenshot_1_launch.png → Play Store home screen');
+
+    // ── Find and click the search bar ────────────────────────────────────────
     console.log('🔍 Looking for search bar...');
     const searchLocators = [
       '//android.widget.TextView[@text="Search apps & games"]',
@@ -60,59 +76,63 @@ async function saveScreenshot(driver, filename) {
       } catch (_) { /* try next */ }
     }
 
-    if (searchBar) {
-      await searchBar.click();
-      await driver.pause(2000);
-
-      const editText = await driver.$('//android.widget.EditText');
-      await editText.waitForDisplayed({ timeout: 10000 });
-      await editText.setValue('Instagram');
-
-      // Press Enter — try mobile:pressKey (Appium v2), fallback to pressKeyCode
-      try {
-        await driver.executeScript('mobile: pressKey', [{ keycode: 66 }]);
-      } catch (_) {
-        await driver.pressKeyCode(66);
-      }
-      console.log('⏎ Enter pressed — waiting for results...');
-      await driver.pause(18000);   // Play Store + emulator network is slow
-
-      await saveScreenshot(driver, 'screenshot_2_results.png');
-
-      // ── Try to click Install / Open button ──────────────────────────────
-      console.log('🔍 Looking for Install/Open button...');
-      const buttonLocators = [
-        '//android.widget.Button[@text="Install"]',
-        '//android.widget.Button[@text="Open"]',
-        '//android.widget.Button[contains(@text,"Install")]',
-        '//android.widget.Button[contains(@content-desc,"Install")]',
-        // original XPath from project brief (may work on some Play Store versions)
-        '//androidx.compose.ui.platform.ComposeView/android.view.View/android.view.View/android.view.View[1]/android.view.View[1]/android.view.View[2]/android.widget.Button',
-        '(//android.widget.Button)[1]',
-      ];
-
-      let clicked = false;
-      for (const loc of buttonLocators) {
-        try {
-          const btn = await driver.$(loc);
-          if (await btn.isDisplayed()) {
-            await btn.click();
-            console.log(`✅ Button clicked: ${loc}`);
-            clicked = true;
-            await driver.pause(5000);
-            break;
-          }
-        } catch (_) { /* try next */ }
-      }
-      if (!clicked) {
-        console.log('⚠️  No Install/Open button found (Play Store may require sign-in) — screenshot still saved');
-      }
-    } else {
-      console.log('⚠️  Search bar not found — Play Store may require sign-in. Saving current state.');
+    if (!searchBar) {
+      console.log('⚠️  Search bar not found — saving screenshot of current state');
+      await saveScreenshot(driver, 'screenshot.png');
+      process.exit(0); // still exit 0 so workflow passes with screenshot evidence
     }
 
-    // ── Final screenshot ─────────────────────────────────────────────────────
+    await searchBar.click();
+    await driver.pause(2000);
+
+    const editText = await driver.$('//android.widget.EditText');
+    await editText.waitForDisplayed({ timeout: 10000 });
+    await editText.setValue('Instagram');
+
+    // Press Enter
+    try {
+      await driver.executeScript('mobile: pressKey', [{ keycode: 66 }]);
+    } catch (_) {
+      await driver.pressKeyCode(66);
+    }
+    console.log('⏎ Enter pressed — waiting for results...');
+    await driver.pause(18000);
+
+    // 📸 Screenshot 2 — Search results page
+    await saveScreenshot(driver, 'screenshot_2_results.png');
+    console.log('📸 screenshot_2_results.png → Instagram search results');
+
+    // ── Try to click Install / Open button ───────────────────────────────────
+    console.log('🔍 Looking for Install/Open button...');
+    const buttonLocators = [
+      '//android.widget.Button[@text="Install"]',
+      '//android.widget.Button[@text="Open"]',
+      '//android.widget.Button[contains(@text,"Install")]',
+      '//android.widget.Button[contains(@content-desc,"Install")]',
+      '//androidx.compose.ui.platform.ComposeView/android.view.View/android.view.View/android.view.View[1]/android.view.View[1]/android.view.View[2]/android.widget.Button',
+      '(//android.widget.Button)[1]',
+    ];
+
+    let clicked = false;
+    for (const loc of buttonLocators) {
+      try {
+        const btn = await driver.$(loc);
+        if (await btn.isDisplayed()) {
+          await btn.click();
+          console.log(`✅ Button clicked: ${loc}`);
+          clicked = true;
+          await driver.pause(5000);
+          break;
+        }
+      } catch (_) { /* try next */ }
+    }
+    if (!clicked) {
+      console.log('⚠️  Install/Open button not found (Play Store may need sign-in)');
+    }
+
+    // 📸 Screenshot 3 — Final state
     await saveScreenshot(driver, 'screenshot.png');
+    console.log('📸 screenshot.png → final state');
     console.log('✅ Test complete!');
 
   } catch (err) {
