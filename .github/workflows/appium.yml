@@ -11,24 +11,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Checkout ─────────────────────────────────────────────────────────
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── 2. Java (required by Android SDK / emulator) ─────────────────────
+      # ── 2. Java ──────────────────────────────────────────────────────────────
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # ── 3. Node.js ───────────────────────────────────────────────────────
+      # ── 3. Node.js ───────────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # ── 4. KVM acceleration (required for Android emulator on Linux) ──────
+      # ── 4. KVM acceleration ───────────────────────────────────────────────────
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
@@ -36,7 +36,18 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # ── 5. Appium (global) + UiAutomator2 driver ─────────────────────────
+      # ── 5. ★ KEY FIX: Start ADB daemon BEFORE the emulator runner ────────────
+      #    The emulator logs "Unable to connect to adb daemon on port: 5037"
+      #    because no ADB server is running yet. Starting it here first prevents
+      #    the emulator runner from failing before the script even begins.
+      - name: Start ADB server
+        run: |
+          adb start-server
+          sleep 2
+          adb version
+          adb devices
+
+      # ── 6. Appium + UiAutomator2 ─────────────────────────────────────────────
       - name: Install Appium + UiAutomator2 driver
         env:
           APPIUM_HOME: /home/runner/.appium
@@ -45,23 +56,15 @@ jobs:
           appium driver install uiautomator2
           appium driver list --installed
 
-      # ── 6. Project dependencies ───────────────────────────────────────────
+      # ── 7. Project dependencies ───────────────────────────────────────────────
       - name: Install project dependencies
         run: npm install --legacy-peer-deps
 
-      # ── 7. wait-on (used in the emulator script to poll Appium readiness) ─
+      # ── 8. wait-on ────────────────────────────────────────────────────────────
       - name: Install wait-on globally
         run: npm install -g wait-on
 
-      # ── 8. Debug: show repo layout ────────────────────────────────────────
-      - name: Debug – list repo contents
-        run: |
-          echo "=== Repo root ==="
-          ls -la
-          echo "=== Looking for APKs ==="
-          find . -type f -name "*.apk" || echo "No APK found (not required for Play Store test)"
-
-      # ── 9. Run tests inside Android emulator ──────────────────────────────
+      # ── 9. Run tests inside Android emulator ──────────────────────────────────
       - name: Run Appium tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
@@ -70,48 +73,70 @@ jobs:
           api-level: 34
           arch: x86_64
           profile: pixel_6
-          # google_apis_playstore includes the Play Store package
           target: google_apis_playstore
           avd-name: test_avd
           force-avd-creation: false
+          # Give the emulator up to 10 minutes to fully boot
+          startup-timeout: 600
           emulator-options: >-
             -no-snapshot-save
             -no-window
             -gpu swiftshader_indirect
             -noaudio
             -no-boot-anim
+            -no-metrics
           disable-animations: true
           script: |
-            # ── Start Appium in background ────────────────────────────────
+            # ── Verify ADB sees the emulator ──────────────────────────────
+            echo "=== ADB devices at script start ==="
+            adb devices
+
+            # ── Extra boot wait loop (ensure fully ready) ─────────────────
+            echo "=== Waiting for sys.boot_completed ==="
+            BOOT_TIMEOUT=300
+            ELAPSED=0
+            until adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | grep -q "^1$"; do
+              if [ "$ELAPSED" -ge "$BOOT_TIMEOUT" ]; then
+                echo "❌ Emulator did not fully boot within ${BOOT_TIMEOUT}s"
+                adb devices
+                exit 1
+              fi
+              echo "  ... still booting (${ELAPSED}s elapsed)"
+              sleep 5
+              ELAPSED=$((ELAPSED + 5))
+            done
+            echo "✅ Android fully booted after ${ELAPSED}s"
+
+            # ── Let system services settle ────────────────────────────────
+            sleep 8
+
+            echo "=== Android version ==="
+            adb -s emulator-5554 shell getprop ro.build.version.release
+
+            # ── Start Appium ──────────────────────────────────────────────
+            echo "=== Starting Appium ==="
             appium --port 4723 \
                    --log appium.log \
                    --log-level info \
                    --base-path '/' &
             APPIUM_PID=$!
 
-            # ── Wait until Appium is ready (max 90 s) ────────────────────
+            # ── Wait until Appium is ready ────────────────────────────────
             wait-on tcp:127.0.0.1:4723 --timeout 90000 --interval 3000 \
               || { echo "=== Appium failed to start ==="; cat appium.log; kill "$APPIUM_PID"; exit 1; }
             echo "✅ Appium server is ready!"
-
-            # ── Confirm emulator is connected ────────────────────────────
-            adb devices
 
             # ── Run the test ──────────────────────────────────────────────
             node test_sample.js
             TEST_EXIT=$?
 
-            # ── Dump Appium logs for debugging ────────────────────────────
             echo "=== Appium logs ==="
             cat appium.log || true
 
-            # ── Clean up Appium process ───────────────────────────────────
             kill "$APPIUM_PID" 2>/dev/null || true
-
-            # ── Propagate test exit code ──────────────────────────────────
             exit $TEST_EXIT
 
-      # ── 10. Upload screenshots (always, even on failure) ──────────────────
+      # ── 10. Upload screenshots ────────────────────────────────────────────────
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         if: always()
@@ -124,7 +149,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # ── 11. Upload Appium logs (always, even on failure) ──────────────────
+      # ── 11. Upload Appium logs ────────────────────────────────────────────────
       - name: Upload Appium logs
         uses: actions/upload-artifact@v4
         if: always()
