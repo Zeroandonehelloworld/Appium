@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# run_tests.sh — called by android-emulator-runner script: block
-# Runs as a real bash script (not line-by-line sh -c), so loops work fine.
+# run_tests.sh — called by android-emulator-runner script: bash run_tests.sh
 set -e
 
 # ── 1. Fix ADB offline state ───────────────────────────────────────────────────
@@ -29,13 +28,23 @@ until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "^1$"; do
 done
 echo "✅ Android fully booted after ${ELAPSED}s"
 
-# ── 3. Let system services settle ─────────────────────────────────────────────
+# ── 3. Let Google services fully settle ───────────────────────────────────────
 sleep 10
+
+# ── 4. FIX: Force-launch Play Store via adb BEFORE Appium starts ──────────────
+#    Without this, Appium connects but the app never opens → home screen only.
+echo "=== Launching Play Store via adb ==="
+adb shell am start -n com.android.vending/com.google.android.finsky.activities.MainActivity
+sleep 6
+
+# Confirm Play Store is in foreground
+echo "=== Current foreground activity ==="
+adb shell dumpsys window windows | grep -E "mCurrentFocus|mFocusedApp" || true
 
 echo "=== Android version ==="
 adb shell getprop ro.build.version.release
 
-# ── 4. Start Appium ───────────────────────────────────────────────────────────
+# ── 5. Start Appium ───────────────────────────────────────────────────────────
 echo "=== Starting Appium ==="
 appium --port 4723 \
        --log appium.log \
@@ -43,7 +52,7 @@ appium --port 4723 \
        --base-path '/' &
 APPIUM_PID=$!
 
-# ── 5. Wait until Appium is ready ─────────────────────────────────────────────
+# ── 6. Wait until Appium is ready ─────────────────────────────────────────────
 npx wait-on tcp:127.0.0.1:4723 --timeout 90000 --interval 2000 || {
   echo "=== Appium failed to start ==="
   cat appium.log || true
@@ -52,11 +61,10 @@ npx wait-on tcp:127.0.0.1:4723 --timeout 90000 --interval 2000 || {
 }
 echo "✅ Appium server is ready!"
 
-# ── 6. Run the test ───────────────────────────────────────────────────────────
+# ── 7. Run the test ───────────────────────────────────────────────────────────
 node test_sample.js
 TEST_EXIT=$?
 
-# ── 7. Show Appium logs on failure ────────────────────────────────────────────
 if [ $TEST_EXIT -ne 0 ]; then
   echo "=== Appium logs (failure) ==="
   cat appium.log || true
