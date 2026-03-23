@@ -49,10 +49,20 @@ jobs:
       - name: Install project dependencies
         run: npm install --legacy-peer-deps
 
-      # ── 7. Run tests inside Android emulator ──────────────────────────────────
-      #    NOTE: adb only becomes available INSIDE this action's script block.
-      #    The Android SDK (and adb) is set up by the action itself before
-      #    running the script — it does NOT exist in earlier steps.
+      # ── 7. Make the test runner script executable ─────────────────────────────
+      - name: Make run_tests.sh executable
+        run: chmod +x run_tests.sh
+
+      # ── 8. Run tests inside Android emulator ──────────────────────────────────
+      #
+      #    KEY FIX: android-emulator-runner runs each line of `script:` as its
+      #    own `/usr/bin/sh -c` call. This means multi-line constructs like
+      #    until...done and if...fi break with "Syntax error: end of file".
+      #
+      #    Solution: put ALL shell logic in run_tests.sh (committed to repo),
+      #    and `script:` just calls it with bash. Bash runs the whole file as
+      #    one process, so loops and conditionals work perfectly.
+      #
       - name: Run Appium tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
@@ -72,64 +82,9 @@ jobs:
             -no-boot-anim
             -no-metrics
           disable-animations: true
-          script: |
-            # ── FIX: restart ADB here — SDK is now on PATH ────────────────
-            echo "=== Restarting ADB server ==="
-            adb kill-server
-            sleep 2
-            adb start-server
-            sleep 3
-            adb version
-            adb devices
+          script: bash run_tests.sh
 
-            # ── Wait until Android has fully booted ───────────────────────
-            echo "=== Waiting for sys.boot_completed ==="
-            BOOT_TIMEOUT=300
-            ELAPSED=0
-            until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "^1$"; do
-              if [ "$ELAPSED" -ge "$BOOT_TIMEOUT" ]; then
-                echo "❌ Emulator did not fully boot within ${BOOT_TIMEOUT}s"
-                adb devices
-                exit 1
-              fi
-              echo "  ... still booting (${ELAPSED}s)"
-              sleep 5
-              ELAPSED=$((ELAPSED + 5))
-            done
-            echo "✅ Android fully booted after ${ELAPSED}s"
-
-            # Let system services (Play Store etc.) settle
-            sleep 8
-
-            echo "=== Android version ==="
-            adb shell getprop ro.build.version.release
-
-            # ── Start Appium ──────────────────────────────────────────────
-            echo "=== Starting Appium ==="
-            appium --port 4723 \
-                   --log appium.log \
-                   --log-level info \
-                   --base-path '/' &
-            APPIUM_PID=$!
-
-            # ── Wait until Appium is ready ────────────────────────────────
-            npx wait-on tcp:127.0.0.1:4723 --timeout 90000 --interval 2000 \
-              || { echo "=== Appium failed to start ==="; cat appium.log; kill "$APPIUM_PID"; exit 1; }
-            echo "✅ Appium server is ready!"
-
-            # ── Run the test ──────────────────────────────────────────────
-            node test_sample.js
-            TEST_EXIT=$?
-
-            if [ $TEST_EXIT -ne 0 ]; then
-              echo "=== Appium logs (failure) ==="
-              cat appium.log || true
-            fi
-
-            kill "$APPIUM_PID" 2>/dev/null || true
-            exit $TEST_EXIT
-
-      # ── 8. Upload screenshots ─────────────────────────────────────────────────
+      # ── 9. Upload screenshots ─────────────────────────────────────────────────
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         if: always()
@@ -142,7 +97,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # ── 9. Upload Appium logs ─────────────────────────────────────────────────
+      # ── 10. Upload Appium logs ────────────────────────────────────────────────
       - name: Upload Appium logs
         uses: actions/upload-artifact@v4
         if: always()
