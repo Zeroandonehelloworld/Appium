@@ -1,62 +1,77 @@
 const { remote } = require('webdriverio');
-const { execSync } = require('child_process');
 
 const capabilities = {
   platformName: 'Android',
   'appium:automationName': 'UiAutomator2',
-  'appium:deviceName': 'emulator-5554',
+  'appium:appPackage': 'com.android.vending',      // Play Store
+  'appium:appActivity': 'com.google.android.finsky.activities.MainActivity', // more reliable launcher
   'appium:noReset': true,
-  'appium:fullReset': false,
-  'appium:autoGrantPermissions': true
+  'appium:uiautomator2ServerInstallTimeout': 120000,
+  'appium:systemPort': 8200,                        // helps avoid port conflicts
+  'appium:newCommandTimeout': 300
 };
 
 (async () => {
-  const driver = await remote({
-    protocol: 'http',
-    hostname: '127.0.0.1',
-    port: 4723,
-    path: '/',
-    capabilities,
-  });
+  let driver;
 
   try {
-    console.log('Session created. Launching Play Store...');
+    driver = await remote({
+      protocol: 'http',
+      hostname: '127.0.0.1',
+      port: 4723,
+      path: '/',
+      capabilities
+    });
 
-    // This line fixes the launch error
-    execSync('adb shell am start -n com.android.vending/.AssetBrowserActivity');
+    console.log('Session started');
 
-    await driver.pause(20000); // Wait for Play Store to fully open
+    // Wait for Play Store to be ready
+    await driver.pause(8000);
 
-    console.log('Play Store should be open. Clicking search button...');
+    // Search bar - more robust locator + wait
+    const searchBar = await driver.$('//android.widget.TextView[@text="Search apps & games"]');
+    await searchBar.waitForDisplayed({ timeout: 20000, timeoutMsg: 'Search bar not found' });
+    await searchBar.click();
 
-    // Correct accessibility id syntax
-    const searchButton = await driver.$('~Search');
-    await searchButton.waitForExist({ timeout: 30000 });
-    await searchButton.click();
+    const editText = await driver.$('//android.widget.EditText');
+    await editText.waitForDisplayed({ timeout: 10000 });
+    await editText.setValue('Instagram');
 
-    await driver.pause(5000);
+    // Enter key
+    await driver.pressKeyCode(66);
+    console.log('Enter pressed');
 
-    const searchInput = await driver.$('//android.widget.EditText');
-    await searchInput.waitForExist({ timeout: 20000 });
-    await searchInput.setValue('Instagram');
+    // Wait longer for results (emulator + network is slow)
+    await driver.pause(18000);
 
-    await driver.pressKeyCode(66); // Enter
+    // Try to find and click first Install button
+    // This XPath is fragile — may need update if UI changes
+    const installBtnXPath = '//androidx.compose.ui.platform.ComposeView' +
+                           '/android.view.View/android.view.View/android.view.View[1]' +
+                           '/android.view.View[1]/android.view.View[2]/android.widget.Button';
 
-    await driver.pause(15000);
-
-    const installBtn = await driver.$('//android.widget.Button[contains(@text, "Install")]');
-    if (await installBtn.isExisting({ timeout: 10000 })) {
+    const installBtn = await driver.$(installBtnXPath);
+    if (await installBtn.isDisplayed({ timeout: 10000 })) {
+      console.log('Found Install button → clicking');
       await installBtn.click();
-      console.log('Clicked Install');
+      await driver.pause(6000); // wait a bit after click
     } else {
-      console.log('No Install button found');
+      console.log('Install button not found with given XPath — UI probably changed');
     }
 
+    // Take screenshot
     await driver.saveScreenshot('./screenshot.png');
-    console.log('Test finished – screenshot saved');
+    console.log('Screenshot saved to ./screenshot.png');
+
   } catch (err) {
-    console.error('Error:', err.message || err);
+    console.error('Test failed:', err);
+    if (driver) {
+      try { await driver.saveScreenshot('./error-screenshot.png'); } catch {}
+    }
+    throw err; // make workflow fail if critical error
   } finally {
-    await driver.deleteSession();
+    if (driver) {
+      await driver.deleteSession();
+    }
   }
 })();
