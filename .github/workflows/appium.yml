@@ -1,10 +1,10 @@
-name: Appium Android Tests
+name: Appium Android Tests - Play Store
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
@@ -25,72 +25,68 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Enable KVM acceleration for emulator
+      - name: Enable KVM (for emulator acceleration)
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
       - name: Install Appium + UiAutomator2 driver
-        env:
-          APPIUM_HOME: /home/runner/.appium
         run: |
-          npm install -g appium@latest
+          npm install -g appium@next
           appium driver install uiautomator2
           appium driver list --installed
 
       - name: Install project dependencies
-        run: npm install --legacy-peer-deps
+        run: npm install webdriverio @wdio/utils --legacy-peer-deps   # only what's needed
 
-      - name: Debug – show basic environment info
+      - name: Debug - list repo contents
         run: |
           pwd
           ls -la
-          echo "Testing with built-in Play Store (no APK needed)"
+          find . -type f \( -name "*.apk" -o -name "*.js" -o -name "*.yml" \)
 
-      - name: Run Appium tests on emulator
+      - name: Start emulator + Appium + Run test
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           arch: x86_64
           profile: pixel_6
           target: google_apis
-          avd-name: test_avd
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
           script: |
-            echo "Starting Appium..."
+            # Start Appium in background
             appium --port 4723 --log appium.log --log-level info &
             APPIUM_PID=$!
 
-            echo "Waiting for Appium to be ready (with retries)..."
-            i=1
-            while [ $i -le 12 ]
-            do
-              echo "Attempt $i/12: Checking port 4723..."
-              if npx wait-on tcp:4723 --timeout 90000 --log; then
-                echo "Appium is ready!"
-                break
-              fi
-              echo "Not ready yet, waiting 30s more..."
-              sleep 30
-              i=$((i+1))
-            done
+            # Wait for Appium to be ready (very reliable)
+            npx wait-on tcp:4723 --timeout 90000 --log --interval 2000 || { cat appium.log; kill $APPIUM_PID; exit 1; }
 
-            if ! npx wait-on tcp:4723 --timeout 10000; then
-              echo "Appium failed to start after retries"
-              cat appium.log
-              kill $APPIUM_PID || true
-              exit 1
-            fi
+            echo "Appium server is ready!"
 
-            echo "Appium server is ready! Running tests..."
+            # Run the test
             node test_sample.js
             TEST_EXIT=$?
 
-            echo "=== Appium logs ==="
-            cat appium.log || true
+            # Show logs only if test failed (save quota)
+            if [ $TEST_EXIT -ne 0 ]; then
+              echo "=== Appium logs (failure) ==="
+              cat appium.log
+            fi
 
+            # Cleanup
             kill $APPIUM_PID 2>/dev/null || true
+
             exit $TEST_EXIT
+
+      - name: Upload screenshot artifact (even on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: |
+            screenshot.png
+            error-screenshot.png
+          if-no-files-found: warn
