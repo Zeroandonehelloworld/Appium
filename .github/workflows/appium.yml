@@ -36,10 +36,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # ── 5. ★ KEY FIX: Start ADB daemon BEFORE the emulator runner ────────────
-      #    The emulator logs "Unable to connect to adb daemon on port: 5037"
-      #    because no ADB server is running yet. Starting it here first prevents
-      #    the emulator runner from failing before the script even begins.
+      # ── 5. Start ADB daemon BEFORE emulator runner ────────────────────────────
       - name: Start ADB server
         run: |
           adb start-server
@@ -76,8 +73,6 @@ jobs:
           target: google_apis_playstore
           avd-name: test_avd
           force-avd-creation: false
-          # Give the emulator up to 10 minutes to fully boot
-          startup-timeout: 600
           emulator-options: >-
             -no-snapshot-save
             -no-window
@@ -87,11 +82,10 @@ jobs:
             -no-metrics
           disable-animations: true
           script: |
-            # ── Verify ADB sees the emulator ──────────────────────────────
             echo "=== ADB devices at script start ==="
             adb devices
 
-            # ── Extra boot wait loop (ensure fully ready) ─────────────────
+            # ── Wait until Android has fully booted ───────────────────────
             echo "=== Waiting for sys.boot_completed ==="
             BOOT_TIMEOUT=300
             ELAPSED=0
@@ -158,3 +152,4 @@ jobs:
           path: appium.log
           if-no-files-found: warn
           retention-days: 14
+          
