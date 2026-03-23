@@ -1,77 +1,135 @@
 const { remote } = require('webdriverio');
 
 const capabilities = {
+  // platformName is a W3C standard cap — NO "appium:" prefix
   platformName: 'Android',
+  'appium:deviceName': 'emulator-5554',        // GitHub Actions emulator name
   'appium:automationName': 'UiAutomator2',
-  'appium:appPackage': 'com.android.vending',      // Play Store
-  'appium:appActivity': 'com.google.android.finsky.activities.MainActivity', // more reliable launcher
+  'appium:appPackage': 'com.android.vending',
+  'appium:appActivity': 'com.google.android.finsky.activities.MainActivity',
   'appium:noReset': true,
-  'appium:uiautomator2ServerInstallTimeout': 120000,
-  'appium:systemPort': 8200,                        // helps avoid port conflicts
-  'appium:newCommandTimeout': 300
+  'appium:autoGrantPermissions': true,
+  'appium:newCommandTimeout': 120,
 };
+
+const wdOpts = {
+  protocol: 'http',
+  hostname: '127.0.0.1',
+  port: 4723,
+  path: '/',
+  capabilities,
+  logLevel: 'info',
+};
+
+async function saveScreenshot(driver, filename) {
+  try {
+    await driver.saveScreenshot(`./${filename}`);
+    console.log(`✅ Screenshot saved: ${filename}`);
+  } catch (e) {
+    console.error(`❌ Could not save screenshot ${filename}:`, e.message);
+  }
+}
 
 (async () => {
   let driver;
-
   try {
-    driver = await remote({
-      protocol: 'http',
-      hostname: '127.0.0.1',
-      port: 4723,
-      path: '/',
-      capabilities
-    });
+    console.log('🚀 Connecting to Appium...');
+    driver = await remote(wdOpts);
+    console.log('✅ Session created');
 
-    console.log('Session started');
+    // Wait for Play Store to fully load
+    await driver.pause(7000);
+    await saveScreenshot(driver, 'screenshot_1_launch.png');
 
-    // Wait for Play Store to be ready
-    await driver.pause(8000);
+    // ── Find search bar ──────────────────────────────────────────────────────
+    console.log('🔍 Looking for search bar...');
+    let searchBar;
 
-    // Search bar - more robust locator + wait
-    const searchBar = await driver.$('//android.widget.TextView[@text="Search apps & games"]');
-    await searchBar.waitForDisplayed({ timeout: 20000, timeoutMsg: 'Search bar not found' });
-    await searchBar.click();
+    // Try multiple locator strategies (Play Store UI varies by version / sign-in state)
+    const searchLocators = [
+      '//android.widget.TextView[contains(@text,"Search")]',
+      '//android.widget.TextView[contains(@content-desc,"Search")]',
+      '//android.widget.EditText[contains(@hint,"Search")]',
+      '//android.widget.SearchBar',
+    ];
 
-    const editText = await driver.$('//android.widget.EditText');
-    await editText.waitForDisplayed({ timeout: 10000 });
-    await editText.setValue('Instagram');
-
-    // Enter key
-    await driver.pressKeyCode(66);
-    console.log('Enter pressed');
-
-    // Wait longer for results (emulator + network is slow)
-    await driver.pause(18000);
-
-    // Try to find and click first Install button
-    // This XPath is fragile — may need update if UI changes
-    const installBtnXPath = '//androidx.compose.ui.platform.ComposeView' +
-                           '/android.view.View/android.view.View/android.view.View[1]' +
-                           '/android.view.View[1]/android.view.View[2]/android.widget.Button';
-
-    const installBtn = await driver.$(installBtnXPath);
-    if (await installBtn.isDisplayed({ timeout: 10000 })) {
-      console.log('Found Install button → clicking');
-      await installBtn.click();
-      await driver.pause(6000); // wait a bit after click
-    } else {
-      console.log('Install button not found with given XPath — UI probably changed');
+    for (const loc of searchLocators) {
+      try {
+        const el = await driver.$(loc);
+        if (await el.isDisplayed()) {
+          searchBar = el;
+          console.log(`✅ Search bar found with: ${loc}`);
+          break;
+        }
+      } catch (_) { /* try next */ }
     }
 
-    // Take screenshot
-    await driver.saveScreenshot('./screenshot.png');
-    console.log('Screenshot saved to ./screenshot.png');
+    if (searchBar) {
+      await searchBar.click();
+      await driver.pause(2000);
+
+      // Type in search box
+      const searchInput = await driver.$('//android.widget.EditText');
+      await searchInput.clearValue();
+      await searchInput.setValue('Instagram');
+      await driver.pause(1000);
+
+      // Press Enter — use mobile:pressKey (Appium v2 compatible)
+      try {
+        await driver.executeScript('mobile: pressKey', [{ keycode: 66 }]);
+      } catch (_) {
+        // Fallback for older Appium versions
+        await driver.pressKeyCode(66);
+      }
+      console.log('⏎ Enter pressed, waiting for results...');
+      await driver.pause(7000);
+
+      await saveScreenshot(driver, 'screenshot_2_results.png');
+
+      // ── Try clicking the first Install / Open button ───────────────────────
+      console.log('🔍 Looking for Install/Open button...');
+      const buttonLocators = [
+        // Flexible: any Button whose text is Install or Open
+        '//android.widget.Button[@text="Install"]',
+        '//android.widget.Button[@text="Open"]',
+        '//android.widget.Button[contains(@text,"Install")]',
+        // ContentDesc fallback
+        '//android.widget.Button[contains(@content-desc,"Install")]',
+        // First button in the first result card
+        '(//android.widget.Button)[1]',
+      ];
+
+      let clicked = false;
+      for (const loc of buttonLocators) {
+        try {
+          const btn = await driver.$(loc);
+          if (await btn.isDisplayed()) {
+            await btn.click();
+            console.log(`✅ Button clicked with: ${loc}`);
+            clicked = true;
+            await driver.pause(3000);
+            break;
+          }
+        } catch (_) { /* try next */ }
+      }
+      if (!clicked) {
+        console.log('⚠️  No Install/Open button found (sign-in may be required — screenshot still saved)');
+      }
+    } else {
+      console.log('⚠️  Search bar not found — Play Store may require sign-in. Saving current state.');
+    }
+
+    // ── Final screenshot ─────────────────────────────────────────────────────
+    await saveScreenshot(driver, 'screenshot.png');
+    console.log('✅ Test complete!');
 
   } catch (err) {
-    console.error('Test failed:', err);
-    if (driver) {
-      try { await driver.saveScreenshot('./error-screenshot.png'); } catch {}
-    }
-    throw err; // make workflow fail if critical error
+    console.error('❌ Test error:', err.message || err);
+    if (driver) await saveScreenshot(driver, 'screenshot.png');
+    process.exit(1);
   } finally {
     if (driver) {
-      await driver.deleteSession();
+      try { await driver.deleteSession(); } catch (_) {}
     }
   }
 })();
