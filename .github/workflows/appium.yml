@@ -29,6 +29,15 @@ jobs:
         with:
           node-version: '20.19.0'
 
+      - name: Check KVM availability
+        run: |
+          if [ ! -e /dev/kvm ]; then
+            echo "::error::This runner has no /dev/kvm device; Android emulator acceleration is unavailable."
+            exit 1
+          fi
+          sudo chmod 666 /dev/kvm
+          ls -l /dev/kvm
+
       - name: Install Appium and UiAutomator2
         run: |
           npm install -g appium@latest
@@ -42,7 +51,7 @@ jobs:
       - name: Make test runner executable
         run: chmod +x run_tests.sh
 
-      - name: Run Appium tests on a fresh emulator
+      - name: Run Appium tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -50,16 +59,16 @@ jobs:
           profile: pixel_6
           target: google_apis_playstore
           avd-name: test_avd
-          force-avd-creation: true
+          force-avd-creation: false
           emulator-options: >-
-            -no-snapshot-load
-            -no-snapshot-save
+            -no-snapshot
             -no-window
             -gpu swiftshader_indirect
             -noaudio
             -no-boot-anim
             -no-metrics
           disable-animations: true
+          emulator-boot-timeout: 600
           script: bash ./run_tests.sh
 
       - name: Upload screenshots
