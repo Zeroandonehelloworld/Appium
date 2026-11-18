@@ -82,12 +82,32 @@ appium driver list --installed || { echo "❌ No Appium drivers installed"; exit
 #    Also: redirect the process's own stdout/stderr to a second file. If
 #    Appium dies before opening appium.log (its internal logger), this file
 #    still captures whatever error it printed on the way out.
+echo "=== Memory before starting Appium ==="
+free -h
+
+# GitHub-hosted ubuntu-latest runners have ~7GB RAM. A pixel_6 +
+# google_apis_playstore emulator can eat most of that, leaving nothing for
+# the Node/Appium process that starts right after boot — the OOM killer
+# then kills it silently (no stdout, no log file content, just gone), which
+# is exactly what the previous run showed. Add swap as a safety margin.
+if [ "$(swapon --show | wc -l)" -eq 0 ]; then
+  echo "=== No swap present, adding 4G swap file ==="
+  sudo fallocate -l 4G /swapfile && \
+    sudo chmod 600 /swapfile && \
+    sudo mkswap /swapfile && \
+    sudo swapon /swapfile && \
+    echo "✅ swap added" || echo "⚠️  could not add swap (continuing anyway)"
+  free -h
+fi
+
 echo "=== Starting Appium ==="
 rm -f appium.log appium_stdout.log
-appium --port 4723 \
-       --log appium.log \
-       --log-level info \
-       > appium_stdout.log 2>&1 &
+(
+  appium --port 4723 \
+         --log appium.log \
+         --log-level info
+  echo "APPIUM_EXIT_CODE=$?"
+) > appium_stdout.log 2>&1 &
 APPIUM_PID=$!
 
 # Give it a moment, then check it didn't die on the spot.
@@ -95,9 +115,13 @@ sleep 3
 if ! kill -0 "$APPIUM_PID" 2>/dev/null; then
   echo "❌ Appium process ($APPIUM_PID) died immediately after launch"
   echo "--- appium_stdout.log ---"
-  cat appium_stdout.log 2>/dev/null || true
+  cat appium_stdout.log
   echo "--- appium.log ---"
-  cat appium.log 2>/dev/null || true
+  cat appium.log
+  echo "--- free -h ---"
+  free -h
+  echo "--- dmesg (checking for OOM kill) ---"
+  sudo dmesg 2>/dev/null | tail -40 || dmesg | tail -40 || true
   exit 1
 fi
 echo "Appium process is alive (pid $APPIUM_PID), waiting for it to bind the port..."
@@ -108,9 +132,9 @@ WAIT_EXIT=$?
 if [ "$WAIT_EXIT" -ne 0 ]; then
   echo "=== Appium failed to start (did not bind port 4723 within timeout) ==="
   echo "--- appium_stdout.log ---"
-  cat appium_stdout.log 2>/dev/null || true
+  cat appium_stdout.log
   echo "--- appium.log ---"
-  cat appium.log 2>/dev/null || true
+  cat appium.log
   kill "$APPIUM_PID" 2>/dev/null || true
   exit 1
 fi
