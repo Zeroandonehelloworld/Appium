@@ -8,6 +8,8 @@
 # Appium never starts) exits explicitly; everything else is best-effort and
 # the script keeps going.
 
+export APPIUM_HOME="${APPIUM_HOME:-$HOME/.appium}"
+
 # ── 1. Fix ADB offline state ───────────────────────────────────────────────
 echo "=== Restarting ADB server ==="
 adb kill-server || true
@@ -51,25 +53,70 @@ adb shell dumpsys window windows 2>/dev/null | grep -E "mCurrentFocus|mFocusedAp
 echo "=== Android version ==="
 adb shell getprop ro.build.version.release || true
 
-# ── 5. Start Appium ─────────────────────────────────────────────────────────
+# ── 5. Sanity-check the Appium install BEFORE trying to launch it ─────────
+#    Key fix: previously, if `appium` failed to start for any reason (bad
+#    CLI flag, missing driver, etc.) it died silently before its own logger
+#    ever opened appium.log, and we just burned 90s waiting on a port that
+#    was never going to open with zero clue why. Fail fast here instead.
+echo "=== Verifying Appium install ==="
+echo "APPIUM_HOME=$APPIUM_HOME"
+if ! command -v appium >/dev/null 2>&1; then
+  echo "❌ 'appium' binary not found on PATH"
+  echo "PATH=$PATH"
+  npm root -g || true
+  exit 1
+fi
+which appium
+appium --version || { echo "❌ 'appium --version' failed"; exit 1; }
+appium driver list --installed || { echo "❌ No Appium drivers installed"; exit 1; }
+
+# ── 6. Start Appium ─────────────────────────────────────────────────────────
+#    FIX: removed `--base-path '/'`. A bare '/' base path fails Appium's CLI
+#    argument validation on some 2.x/3.x builds, which makes the process
+#    exit immediately — before its internal logger even opens appium.log.
+#    That silent, instant death is exactly what produced "cat: appium.log:
+#    No such file or directory" plus a 90s wait-on timeout with no other
+#    clue. The default base path is already '/', so dropping the flag keeps
+#    identical behavior while avoiding the validation bug.
+#
+#    Also: redirect the process's own stdout/stderr to a second file. If
+#    Appium dies before opening appium.log (its internal logger), this file
+#    still captures whatever error it printed on the way out.
 echo "=== Starting Appium ==="
+rm -f appium.log appium_stdout.log
 appium --port 4723 \
        --log appium.log \
        --log-level info \
-       --base-path '/' &
+       > appium_stdout.log 2>&1 &
 APPIUM_PID=$!
 
-# ── 6. Wait until Appium is ready ───────────────────────────────────────────
-npx wait-on tcp:127.0.0.1:4723 --timeout 90000 --interval 2000
-if [ $? -ne 0 ]; then
-  echo "=== Appium failed to start ==="
-  cat appium.log || true
+# Give it a moment, then check it didn't die on the spot.
+sleep 3
+if ! kill -0 "$APPIUM_PID" 2>/dev/null; then
+  echo "❌ Appium process ($APPIUM_PID) died immediately after launch"
+  echo "--- appium_stdout.log ---"
+  cat appium_stdout.log 2>/dev/null || true
+  echo "--- appium.log ---"
+  cat appium.log 2>/dev/null || true
+  exit 1
+fi
+echo "Appium process is alive (pid $APPIUM_PID), waiting for it to bind the port..."
+
+# ── 7. Wait until Appium is ready ───────────────────────────────────────────
+npx --yes wait-on tcp:127.0.0.1:4723 --timeout 120000 --interval 2000
+WAIT_EXIT=$?
+if [ "$WAIT_EXIT" -ne 0 ]; then
+  echo "=== Appium failed to start (did not bind port 4723 within timeout) ==="
+  echo "--- appium_stdout.log ---"
+  cat appium_stdout.log 2>/dev/null || true
+  echo "--- appium.log ---"
+  cat appium.log 2>/dev/null || true
   kill "$APPIUM_PID" 2>/dev/null || true
   exit 1
 fi
 echo "✅ Appium server is ready!"
 
-# ── 7. Run the test ──────────────────────────────────────────────────────────
+# ── 8. Run the test ──────────────────────────────────────────────────────────
 #    test_sample.js already catches its own errors (missing elements, UI
 #    changes, dropped sessions, ...) and exits 0 so a handled failure never
 #    fails the job; it saves screenshots as evidence instead. We still guard
@@ -82,7 +129,7 @@ set -e
 
 if [ "$TEST_EXIT" -ne 0 ]; then
   echo "⚠️  Test script exited with code $TEST_EXIT — dumping Appium log for diagnosis"
-  cat appium.log || true
+  cat appium.log 2>/dev/null || true
 fi
 
 kill "$APPIUM_PID" 2>/dev/null || true
