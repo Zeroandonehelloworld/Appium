@@ -9,15 +9,21 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Set once at job level so it's identical in every step that touches
+      # Appium (install step AND the emulator-runner step). Previously this
+      # was declared separately on two different steps — same value, but
+      # fragile if one of them ever drifted.
+      APPIUM_HOME: /home/runner/.appium
 
     steps:
       # ── 1. Checkout ──────────────────────────────────────────────────────────
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # ── 2. Java ──────────────────────────────────────────────────────────────
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -26,7 +32,7 @@ jobs:
       #    Appium 3 requires Node >= 20.19, so pin a patch version that
       #    satisfies that instead of a bare major (which can drift).
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20.19.0'
 
@@ -39,17 +45,9 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       # ── 5. Appium + UiAutomator2 ─────────────────────────────────────────────
-      #    FIX: `appium@next` is a stale dist-tag left over from the old
-      #    Appium-2.0-beta days — it no longer tracks a current build. The
-      #    uiautomator2 driver on npm is now v5+, which only works with
-      #    Appium 3 (stable since Aug 2025). Installing the stale `next` tag
-      #    pulled down Appium 2.0.1 alongside a v5+ driver built for Appium 3,
-      #    which is why every session request failed with
-      #    "Cannot find package 'appium'". `appium@latest` now resolves to
-      #    the current Appium 3.x line, which matches the driver.
+      #    `appium@latest` resolves to the current Appium 3.x line, which
+      #    matches the uiautomator2 driver (v5+, Appium-3-only).
       - name: Install Appium + UiAutomator2 driver
-        env:
-          APPIUM_HOME: /home/runner/.appium
         run: |
           npm install -g appium@latest
           appium --version
@@ -66,18 +64,22 @@ jobs:
 
       # ── 8. Run tests inside Android emulator ──────────────────────────────────
       #
-      #    KEY FIX: android-emulator-runner runs each line of `script:` as its
-      #    own `/usr/bin/sh -c` call. This means multi-line constructs like
-      #    until...done and if...fi break with "Syntax error: end of file".
+      #    android-emulator-runner runs each line of `script:` as its own
+      #    `/usr/bin/sh -c` call. Multi-line constructs like until...done and
+      #    if...fi break with "Syntax error: end of file" under plain sh.
       #
       #    Solution: put ALL shell logic in run_tests.sh (committed to repo),
       #    and `script:` just calls it with bash. Bash runs the whole file as
-      #    one process, so loops and conditionals work perfectly.
+      #    one process, so loops and conditionals work correctly.
       #
+      #    FIX: run_tests.sh no longer passes `--base-path '/'` to appium —
+      #    that flag was crashing the Appium process instantly on startup
+      #    (before it ever opened appium.log), which is why every previous
+      #    run just timed out waiting on port 4723 with no log to show for
+      #    it. run_tests.sh also now checks the appium binary and fails fast
+      #    with a clear error instead of silently timing out.
       - name: Run Appium tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
-        env:
-          APPIUM_HOME: /home/runner/.appium
         with:
           api-level: 34
           arch: x86_64
@@ -97,7 +99,7 @@ jobs:
 
       # ── 9. Upload screenshots ─────────────────────────────────────────────────
       - name: Upload screenshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         if: always()
         with:
           name: screenshots
@@ -110,10 +112,12 @@ jobs:
 
       # ── 10. Upload Appium logs ────────────────────────────────────────────────
       - name: Upload Appium logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         if: always()
         with:
           name: appium-logs
-          path: appium.log
+          path: |
+            appium.log
+            appium_stdout.log
           if-no-files-found: warn
           retention-days: 14
