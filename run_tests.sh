@@ -23,17 +23,21 @@ adb devices -l
 echo "=== Waiting for emulator ==="
 ADB_TIMEOUT=180
 ADB_ELAPSED=0
-until adb -s "$DEVICE" get-state 2>/dev/null | grep -qx device; do
+while true; do
+  ADB_STATE=$(adb -s "$DEVICE" get-state 2>/dev/null || true)
+  if [ "$ADB_STATE" = "device" ]; then
+    echo "✅ Emulator is online"
+    break
+  fi
   if [ "$ADB_ELAPSED" -ge "$ADB_TIMEOUT" ]; then
     echo "❌ Emulator never became available through ADB"
     adb devices -l
     exit 1
   fi
-  echo "  ... ADB state not ready (${ADB_ELAPSED}s)"
+  echo "  ... ADB state=${ADB_STATE:-missing} (${ADB_ELAPSED}s)"
   sleep 5
   ADB_ELAPSED=$((ADB_ELAPSED + 5))
 done
-echo "✅ Emulator is online"
 
 echo "=== Waiting for Android boot ==="
 BOOT_TIMEOUT=300
@@ -77,6 +81,15 @@ if ! command -v appium >/dev/null 2>&1; then
 fi
 appium --version
 appium driver list --installed
+
+echo "=== Adding swap if needed ==="
+if [ "$(swapon --show | wc -l)" -eq 0 ]; then
+  sudo fallocate -l 4G /swapfile >/dev/null 2>&1 || true
+  sudo chmod 600 /swapfile >/dev/null 2>&1 || true
+  sudo mkswap /swapfile >/dev/null 2>&1 || true
+  sudo swapon /swapfile >/dev/null 2>&1 || true
+fi
+free -h
 
 echo "=== Starting Appium ==="
 rm -f appium.log appium_stdout.log
