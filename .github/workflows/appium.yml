@@ -23,10 +23,12 @@ jobs:
           java-version: '17'
 
       # ── 3. Node.js ───────────────────────────────────────────────────────────
+      #    Appium 3 requires Node >= 20.19, so pin a patch version that
+      #    satisfies that instead of a bare major (which can drift).
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19.0'
 
       # ── 4. KVM acceleration ───────────────────────────────────────────────────
       - name: Enable KVM
@@ -37,11 +39,20 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       # ── 5. Appium + UiAutomator2 ─────────────────────────────────────────────
+      #    FIX: `appium@next` is a stale dist-tag left over from the old
+      #    Appium-2.0-beta days — it no longer tracks a current build. The
+      #    uiautomator2 driver on npm is now v5+, which only works with
+      #    Appium 3 (stable since Aug 2025). Installing the stale `next` tag
+      #    pulled down Appium 2.0.1 alongside a v5+ driver built for Appium 3,
+      #    which is why every session request failed with
+      #    "Cannot find package 'appium'". `appium@latest` now resolves to
+      #    the current Appium 3.x line, which matches the driver.
       - name: Install Appium + UiAutomator2 driver
         env:
           APPIUM_HOME: /home/runner/.appium
         run: |
-          npm install -g appium@next
+          npm install -g appium@latest
+          appium --version
           appium driver install uiautomator2
           appium driver list --installed
 
